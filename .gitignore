@@ -1,0 +1,17 @@
+__pycache__/
+*.pyc
+.env
+.env.local
+.venv/
+venv/
+*.sqlite
+.alembic/
+*.log
+.DS_Store
+ssh-keygen*
+*.pem
+*.key
+id_*
+*.pub
+.omc/
+how much is it.md
