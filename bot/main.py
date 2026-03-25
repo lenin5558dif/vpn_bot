@@ -95,10 +95,18 @@ async def handle_comment(message: Message, state: FSMContext) -> None:
         comment = ""
     name = data.get("name")
     contact = data.get("contact")
+    if not message.from_user:
+        await message.answer("Не удалось определить отправителя.")
+        return
     tg_id = message.from_user.id
 
-    user = await backend.create_user({"name": name, "contact": contact, "tg_id": tg_id})
-    req = await backend.create_request({"user_id": user["id"], "comment": comment})
+    try:
+        user = await backend.create_user({"name": name, "contact": contact, "tg_id": tg_id})
+        req = await backend.create_request({"user_id": user["id"], "comment": comment})
+    except Exception as exc:
+        logger.error("Failed to create user/request: %s", exc)
+        await message.answer("Ошибка при отправке заявки. Попробуй ещё раз.")
+        return
 
     await message.answer("Заявка отправлена. Админ скоро её рассмотрит.")
     await state.clear()
@@ -138,9 +146,13 @@ async def _ensure_admin(callback: CallbackQuery) -> bool:
 async def approve_request(callback: CallbackQuery) -> None:
     if not await _ensure_admin(callback):
         return
-    parts = callback.data.split(":")
-    _, req_id_str, user_id_str, tg_id_str = parts
-    req_id, user_id, tg_id = int(req_id_str), int(user_id_str), int(tg_id_str)
+    try:
+        parts = callback.data.split(":")
+        _, req_id_str, user_id_str, tg_id_str = parts
+        req_id, user_id, tg_id = int(req_id_str), int(user_id_str), int(tg_id_str)
+    except (ValueError, IndexError):
+        await callback.answer("Некорректные данные", show_alert=True)
+        return
 
     await backend.update_request(req_id, RequestStatus.approved)
     peer = await backend.create_peer(user_id)
@@ -178,9 +190,13 @@ async def approve_request(callback: CallbackQuery) -> None:
 async def reject_request(callback: CallbackQuery) -> None:
     if not await _ensure_admin(callback):
         return
-    parts = callback.data.split(":")
-    _, req_id_str, _, tg_id_str = parts
-    req_id, tg_id = int(req_id_str), int(tg_id_str)
+    try:
+        parts = callback.data.split(":")
+        _, req_id_str, _, tg_id_str = parts
+        req_id, tg_id = int(req_id_str), int(tg_id_str)
+    except (ValueError, IndexError):
+        await callback.answer("Некорректные данные", show_alert=True)
+        return
 
     await backend.update_request(req_id, RequestStatus.rejected)
     await bot.send_message(tg_id, "К сожалению, доступ отклонён. Свяжитесь с админом для подробностей.")

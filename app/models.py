@@ -28,7 +28,7 @@ class PeerStatus(str, Enum):
 
 class User(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
-    tg_id: Optional[int] = Field(default=None, index=True)
+    tg_id: Optional[int] = Field(default=None, index=True, unique=True)
     name: str
     contact: Optional[str] = Field(default=None)
     role: Role = Field(sa_column=Column(PgEnum(Role), nullable=False), default=Role.user)
@@ -85,6 +85,10 @@ class TrafficStat(SQLModel, table=True):
 
 
 class AuditLog(SQLModel, table=True):
+    __table_args__ = (
+        Index("ix_auditlog_ts", "ts"),
+    )
+
     id: Optional[int] = Field(default=None, primary_key=True)
     actor_id: Optional[int] = Field(default=None, foreign_key="user.id")
     action: str

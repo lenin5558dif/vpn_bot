@@ -87,7 +87,7 @@ class TrafficPoller:
             return
 
         async with self.session_factory() as session:
-            peers_res = await session.exec(select(Peer))
+            peers_res = await session.exec(select(Peer.id, Peer.public_key))
             peers = peers_res.all()
 
             # Fetch all latest stats in ONE query (eliminates N+1)
@@ -105,25 +105,23 @@ class TrafficPoller:
                 last_by_peer[row[0]] = (row[1], row[2])
 
             now = datetime.utcnow()
-            for peer in peers:
-                if peer.public_key not in stats:
+            for peer_id, public_key in peers:
+                if public_key not in stats:
                     continue
-                rx, tx = stats[peer.public_key]
-                prev_rx, prev_tx = last_by_peer.get(peer.id, (0, 0))
+                rx, tx = stats[public_key]
+                prev_rx, prev_tx = last_by_peer.get(peer_id, (0, 0))
                 delta_rx = max(rx - prev_rx, 0)
                 delta_tx = max(tx - prev_tx, 0)
 
                 entry = TrafficStat(
-                    peer_id=peer.id,
+                    peer_id=peer_id,
                     ts=now,
                     rx_bytes=rx,
                     tx_bytes=tx,
                     delta_rx=delta_rx,
                     delta_tx=delta_tx,
                 )
-                peer.last_handshake_at = now
                 session.add(entry)
-                session.add(peer)
             await session.commit()
 
     async def cleanup(self) -> None:

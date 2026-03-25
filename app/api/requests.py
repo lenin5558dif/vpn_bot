@@ -53,8 +53,6 @@ async def update_request(
     req.resolved_by = payload.resolved_by
     req.resolved_at = datetime.utcnow()
     session.add(req)
-    await session.commit()
-    await session.refresh(req)
     await record_audit(
         session,
         action="request_update",
@@ -64,4 +62,6 @@ async def update_request(
         ip=request.client.host if request.client else None,
         meta={"status": req.status.value},
     )
+    await session.commit()
+    await session.refresh(req)
     return RequestRead.model_validate(req)

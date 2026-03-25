@@ -329,6 +329,8 @@
     let sparkRxChart, sparkTxChart;
     const DESIRED_POINTS = 60;
 
+    function esc(s) { const d = document.createElement('div'); d.textContent = String(s ?? ''); return d.innerHTML; }
+
     function setStatus(text, color='#22d3ee') {
       statusPill.textContent = text;
       statusPill.style.color = color;
@@ -387,15 +389,15 @@
       renderList(items, req => {
         const div = document.createElement('div');
         div.className = 'item';
-        const statusTag = `<span class="tag ${req.status==='new'?'warn':req.status==='approved'?'success':'danger'}">${req.status}</span>`;
+        const statusTag = `<span class="tag ${req.status==='new'?'warn':req.status==='approved'?'success':'danger'}">${esc(req.status)}</span>`;
         div.innerHTML = `
           <div>
-            <div><strong>#${req.id}</strong> user=${req.user_id} ${statusTag}</div>
-            <div class="small">Comment: ${req.comment || '-'}</div>
+            <div><strong>#${esc(req.id)}</strong> user=${esc(req.user_id)} ${statusTag}</div>
+            <div class="small">Comment: ${esc(req.comment || '-')}</div>
           </div>
           <div class="actions">
-            <button data-req="${req.id}" data-act="approve">Одобрить</button>
-            <button class="danger" data-req="${req.id}" data-act="reject">Отказать</button>
+            <button data-req="${esc(req.id)}" data-act="approve">Одобрить</button>
+            <button class="danger" data-req="${esc(req.id)}" data-act="reject">Отказать</button>
           </div>
         `;
         div.querySelectorAll('button').forEach(btn => {
@@ -412,13 +414,13 @@
         const statusCls = peer.status === 'active' ? 'success' : peer.status === 'disabled' ? 'warn' : 'danger';
         div.innerHTML = `
           <div>
-            <div><strong>#${peer.id}</strong> user=${peer.user_id} <a class="link" href="#" onclick="event.preventDefault()">${peer.address}</a> <span class="tag ${statusCls}">${peer.status}</span></div>
-            <div class="small">Speed: ${peer.speed_limit_mbps} mbit</div>
+            <div><strong>#${esc(peer.id)}</strong> user=${esc(peer.user_id)} <a class="link" href="#" onclick="event.preventDefault()">${esc(peer.address)}</a> <span class="tag ${statusCls}">${esc(peer.status)}</span></div>
+            <div class="small">Speed: ${esc(peer.speed_limit_mbps)} mbit</div>
           </div>
           <div class="actions">
-            <button data-peer="${peer.id}" data-act="disabled">Отключить</button>
-            <button data-peer="${peer.id}" data-act="active" class="secondary">Активировать</button>
-            <button data-peer="${peer.id}" data-act="banned" class="danger">Бан</button>
+            <button data-peer="${esc(peer.id)}" data-act="disabled">Отключить</button>
+            <button data-peer="${esc(peer.id)}" data-act="active" class="secondary">Активировать</button>
+            <button data-peer="${esc(peer.id)}" data-act="banned" class="danger">Бан</button>
           </div>
         `;
         div.querySelectorAll('button').forEach(btn => {
@@ -433,8 +435,8 @@
         const div = document.createElement('div');
         div.className = 'item';
         div.innerHTML = `
-          <div><strong>#${u.id}</strong> ${u.name || ''}</div>
-          <div class="small">Contact: ${u.contact || '-'}</div>
+          <div><strong>#${esc(u.id)}</strong> ${esc(u.name || '')}</div>
+          <div class="small">Contact: ${esc(u.contact || '-')}</div>
         `;
         output.appendChild(div);
       });
@@ -643,10 +645,10 @@
         const row = document.createElement('div');
         row.className = 'event';
         row.innerHTML = `
-          <div class="dot ${ev.tone || ''}"></div>
+          <div class="dot ${esc(ev.tone || '')}"></div>
           <div>
-            <div>${ev.text}</div>
-            <div class="event-time">${formatTs(ev.ts)}</div>
+            <div>${esc(ev.text)}</div>
+            <div class="event-time">${esc(formatTs(ev.ts))}</div>
           </div>
         `;
         box.appendChild(row);

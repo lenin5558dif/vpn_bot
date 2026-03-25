@@ -10,6 +10,13 @@ router = APIRouter(prefix="/users", tags=["users"])
 
 @router.post("", response_model=UserRead)
 async def create_user(payload: UserCreate, session: DBSession, _bot_key: BotKeyDep) -> UserRead:
+    # Upsert: return existing user if tg_id already exists
+    if payload.tg_id is not None:
+        existing = await session.exec(select(User).where(User.tg_id == payload.tg_id))
+        user = existing.first()
+        if user:
+            return UserRead.model_validate(user)
+
     user = User(name=payload.name, contact=payload.contact, tg_id=payload.tg_id, role=Role.user)
     session.add(user)
     await session.commit()

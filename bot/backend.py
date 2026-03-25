@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import httpx
-from jose import JWTError, jwt
+import jwt
 
 from app.config import get_settings
 from app.schemas import RequestStatus
@@ -40,8 +40,11 @@ class BackendClient:
 
     def _is_token_valid(self, token: str) -> bool:
         try:
-            payload = jwt.decode(token, self.settings.jwt_secret, algorithms=[self.settings.jwt_alg])
-        except JWTError:
+            payload = jwt.decode(
+                token, self.settings.jwt_secret, algorithms=[self.settings.jwt_alg],
+                issuer="vpn-admin-api", audience="vpn-admin",
+            )
+        except jwt.InvalidTokenError:
             return False
         exp_ts = payload.get("exp")
         if not exp_ts:

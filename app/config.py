@@ -13,8 +13,9 @@ class Settings(BaseSettings):
     backend_url: str = "http://localhost:8000"
     jwt_secret: str = "change_me"
     jwt_alg: str = "HS256"
+    env: str = "development"
     admin_username: str = "admin"
-    admin_password: str = "admin"
+    admin_password: str = ""
     admin_password_hash: str = ""
 
     # Encryption (Fernet key for WireGuard private keys at rest)

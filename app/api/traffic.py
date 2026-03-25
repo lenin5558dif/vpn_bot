@@ -1,6 +1,7 @@
 from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Query
+from sqlalchemy import func
 from sqlmodel import select
 
 from app.api.deps import AdminDep, DBSession
@@ -42,19 +43,21 @@ async def traffic_summary(
             Peer.user_id,
             Peer.address,
             Peer.status,
-            TrafficStat.delta_rx,
-            TrafficStat.delta_tx,
+            func.sum(TrafficStat.delta_rx).label("rx"),
+            func.sum(TrafficStat.delta_tx).label("tx"),
         )
         .join(Peer, Peer.id == TrafficStat.peer_id)
         .where(TrafficStat.ts >= since)
+        .group_by(TrafficStat.peer_id, Peer.user_id, Peer.address, Peer.status)
     )
-    rows = res.all()
-    summary: dict[int, dict] = {}
-    for peer_id, user_id, addr, status, drx, dtx in rows:
-        entry = summary.setdefault(
-            peer_id,
-            {"peer_id": peer_id, "user_id": user_id, "address": addr, "status": status, "rx": 0, "tx": 0},
-        )
-        entry["rx"] += drx
-        entry["tx"] += dtx
-    return list(summary.values())
+    return [
+        {
+            "peer_id": row[0],
+            "user_id": row[1],
+            "address": row[2],
+            "status": row[3],
+            "rx": row[4] or 0,
+            "tx": row[5] or 0,
+        }
+        for row in res.all()
+    ]

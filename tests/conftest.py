@@ -15,7 +15,10 @@ os.environ["JWT_SECRET"] = "test-secret-key-for-jwt-tokens-32b"
 os.environ["JWT_ALG"] = "HS256"
 os.environ["ADMIN_USERNAME"] = "admin"
 os.environ["ADMIN_PASSWORD"] = "testpass"
-os.environ["ADMIN_PASSWORD_HASH"] = ""
+# Generate hash at import time for tests
+from passlib.context import CryptContext
+_ctx = CryptContext(schemes=["bcrypt"], deprecated="auto")
+os.environ["ADMIN_PASSWORD_HASH"] = _ctx.hash("testpass")
 os.environ["ENCRYPTION_KEY"] = "VGVzdEtleUZvclRlc3RpbmcxMjM0NTY3ODkwYWJjZGU="  # will be overridden
 os.environ["BOT_API_KEY"] = "test-bot-api-key"
 os.environ["BOT_TOKEN"] = "000000000:AAFakeTokenForTesting"

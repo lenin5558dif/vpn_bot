@@ -1,6 +1,6 @@
 import pytest
 from datetime import timedelta
-from jose import jwt
+import jwt
 
 from app.config import get_settings
 from app.security import (
@@ -43,14 +43,16 @@ def test_authenticate_admin_wrong_password():
 
 def test_create_access_token():
     token = create_access_token({"sub": "admin"})
-    payload = jwt.decode(token, settings.jwt_secret, algorithms=[settings.jwt_alg])
+    payload = jwt.decode(token, settings.jwt_secret, algorithms=[settings.jwt_alg], audience="vpn-admin", issuer="vpn-admin-api")
     assert payload["sub"] == "admin"
     assert "exp" in payload
+    assert payload["iss"] == "vpn-admin-api"
+    assert payload["aud"] == "vpn-admin"
 
 
 def test_create_access_token_custom_expiry():
     token = create_access_token({"sub": "admin"}, expires_delta=timedelta(minutes=5))
-    payload = jwt.decode(token, settings.jwt_secret, algorithms=[settings.jwt_alg])
+    payload = jwt.decode(token, settings.jwt_secret, algorithms=[settings.jwt_alg], audience="vpn-admin", issuer="vpn-admin-api")
     assert payload["sub"] == "admin"
 
 

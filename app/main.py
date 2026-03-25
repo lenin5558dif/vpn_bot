@@ -25,7 +25,13 @@ async def lifespan(app: FastAPI):
     await poller.stop()
 
 
-app = FastAPI(title="VPN Admin API", lifespan=lifespan)
+app = FastAPI(
+    title="VPN Admin API",
+    lifespan=lifespan,
+    docs_url=None if settings.env == "production" else "/docs",
+    redoc_url=None if settings.env == "production" else "/redoc",
+    openapi_url=None if settings.env == "production" else "/openapi.json",
+)
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
@@ -44,8 +50,23 @@ async def security_headers(request: Request, call_next) -> Response:
     response = await call_next(request)
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["X-Frame-Options"] = "DENY"
-    response.headers["X-XSS-Protection"] = "1; mode=block"
+    response.headers["Strict-Transport-Security"] = "max-age=63072000; includeSubDomains"
+    response.headers["Content-Security-Policy"] = (
+        "default-src 'self'; script-src 'self'; "
+        "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
+        "font-src https://fonts.gstatic.com"
+    )
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
     return response
+
+
+@app.middleware("http")
+async def limit_request_size(request: Request, call_next) -> Response:
+    content_length = request.headers.get("content-length")
+    if content_length and int(content_length) > 1_000_000:
+        return Response("Request too large", status_code=413)
+    return await call_next(request)
 
 
 app.include_router(health.router)

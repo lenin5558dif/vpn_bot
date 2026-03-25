@@ -2,6 +2,7 @@ from datetime import datetime, timedelta
 import secrets
 
 from fastapi import APIRouter, HTTPException, Query, Request, Response, status
+from sqlalchemy import delete as sa_delete
 from sqlmodel import select
 
 from app.audit import record_audit
@@ -35,8 +36,8 @@ async def create_peer(
     request: Request,
 ) -> PeerRead:
     _ = admin
-    existing_peers = await session.exec(select(Peer))
-    used_addresses = [p.address for p in existing_peers.all() if p.address]
+    addr_res = await session.exec(select(Peer.address).where(Peer.address != None))
+    used_addresses = [a for a in addr_res.all()]
     address = wg.allocate_ip(used_addresses)
     private_key, public_key = await wg.generate_keys()
     allowed_ips = payload.allowed_ips or address
@@ -66,8 +67,6 @@ async def create_peer(
         qr_data=None,
     )
     session.add(cfg)
-    await session.commit()
-
     await record_audit(
         session,
         action="peer_create",
@@ -76,6 +75,7 @@ async def create_peer(
         ip=request.client.host if request.client else None,
         meta={"user_id": peer.user_id},
     )
+    await session.commit()
     return PeerRead.model_validate(peer)
 
 
@@ -99,14 +99,9 @@ async def update_peer(
 
     if peer.status == PeerStatus.banned:
         peer_snapshot = PeerRead.model_validate(peer)
-        # Delete TrafficStat rows first (FK constraint)
-        ts_res = await session.exec(select(TrafficStat).where(TrafficStat.peer_id == peer_id))
-        for ts in ts_res.all():
-            await session.delete(ts)
-        # Delete Config rows
-        cfg_res = await session.exec(select(Config).where(Config.peer_id == peer_id))
-        for cfg in cfg_res.all():
-            await session.delete(cfg)
+        # Bulk delete child rows (FK constraint)
+        await session.exec(sa_delete(TrafficStat).where(TrafficStat.peer_id == peer_id))  # type: ignore[arg-type]
+        await session.exec(sa_delete(Config).where(Config.peer_id == peer_id))  # type: ignore[arg-type]
         # Record audit before deleting the peer
         await record_audit(
             session,
@@ -128,8 +123,6 @@ async def update_peer(
         await wg.apply_speed_limit(address=peer.address.split("/")[0], mbit=peer.speed_limit_mbps)
 
     session.add(peer)
-    await session.commit()
-    await session.refresh(peer)
     await record_audit(
         session,
         action="peer_update",
@@ -138,6 +131,8 @@ async def update_peer(
         ip=request.client.host if request.client else None,
         meta={"status": peer.status.value},
     )
+    await session.commit()
+    await session.refresh(peer)
     return PeerRead.model_validate(peer)
 
 
