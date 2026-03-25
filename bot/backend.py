@@ -30,7 +30,7 @@ class BackendClient:
 
     async def close(self) -> None:
         if self._client and not self._client.is_closed:
-            await self._client.close()
+            await self._client.aclose()
 
     def _bot_key_headers(self) -> dict[str, str]:
         key = self.settings.bot_api_key
@@ -91,7 +91,7 @@ class BackendClient:
 
     async def update_request(self, request_id: int, status: RequestStatus) -> dict[str, Any]:
         resp = await self._request_with_auth(
-            "PATCH", f"/requests/{request_id}", json={"status": status}
+            "PATCH", f"/requests/{request_id}", json={"status": status.value}
         )
         return resp.json()
 

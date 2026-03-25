@@ -42,16 +42,15 @@ async def traffic_summary(
             Peer.user_id,
             Peer.address,
             Peer.status,
-            TrafficStat.ts,
             TrafficStat.delta_rx,
             TrafficStat.delta_tx,
-        ).join(Peer, Peer.id == TrafficStat.peer_id)
+        )
+        .join(Peer, Peer.id == TrafficStat.peer_id)
+        .where(TrafficStat.ts >= since)
     )
     rows = res.all()
     summary: dict[int, dict] = {}
-    for peer_id, user_id, addr, status, ts, drx, dtx in rows:
-        if ts < since:
-            continue
+    for peer_id, user_id, addr, status, drx, dtx in rows:
         entry = summary.setdefault(
             peer_id,
             {"peer_id": peer_id, "user_id": user_id, "address": addr, "status": status, "rx": 0, "tx": 0},

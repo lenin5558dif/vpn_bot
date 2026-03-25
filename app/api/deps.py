@@ -1,3 +1,4 @@
+import hmac
 from typing import Annotated
 
 from fastapi import Depends, Header, HTTPException, status
@@ -15,8 +16,11 @@ settings = get_settings()
 
 async def verify_bot_api_key(x_bot_api_key: str = Header(...)) -> None:
     if not settings.bot_api_key:
-        return  # skip check if not configured (dev mode)
-    if x_bot_api_key != settings.bot_api_key:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Bot API key not configured",
+        )
+    if not hmac.compare_digest(x_bot_api_key, settings.bot_api_key):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Invalid bot API key")
 
 

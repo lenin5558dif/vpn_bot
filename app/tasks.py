@@ -91,10 +91,13 @@ class TrafficPoller:
             peers = peers_res.all()
 
             # Fetch all latest stats in ONE query (eliminates N+1)
+            # Use subquery with MAX(ts) for SQLite/PostgreSQL compatibility
             latest_stats_result = await session.exec(
                 text(
-                    "SELECT DISTINCT ON (peer_id) peer_id, rx_bytes, tx_bytes "
-                    "FROM trafficstat ORDER BY peer_id, ts DESC"
+                    "SELECT t.peer_id, t.rx_bytes, t.tx_bytes "
+                    "FROM trafficstat t "
+                    "INNER JOIN (SELECT peer_id, MAX(ts) AS max_ts FROM trafficstat GROUP BY peer_id) g "
+                    "ON t.peer_id = g.peer_id AND t.ts = g.max_ts"
                 )
             )
             last_by_peer: dict[int, tuple[int, int]] = {}

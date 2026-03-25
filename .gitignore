@@ -15,3 +15,4 @@ id_*
 *.pub
 .omc/
 how much is it.md
+.coverage

@@ -26,4 +26,3 @@ async def record_audit(
         meta=meta,
     )
     session.add(log)
-    await session.commit()

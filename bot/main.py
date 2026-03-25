@@ -29,7 +29,7 @@ backend = BackendClient()
 ADMIN_IDS = {int(x) for x in (settings.admin_ids or "").split(",") if x}
 
 CYR_TO_LAT = {
-    "a": "a", "б": "b", "в": "v", "г": "g", "д": "d", "е": "e", "ё": "e",
+    "а": "a", "б": "b", "в": "v", "г": "g", "д": "d", "е": "e", "ё": "e",
     "ж": "zh", "з": "z", "и": "i", "й": "y", "к": "k", "л": "l", "м": "m",
     "н": "n", "о": "o", "п": "p", "р": "r", "с": "s", "т": "t", "у": "u",
     "ф": "f", "х": "h", "ц": "c", "ч": "ch", "ш": "sh", "щ": "sch", "ъ": "",
@@ -66,6 +66,9 @@ async def cmd_start(message: Message, state: FSMContext) -> None:
 
 @dp.message(RequestAccess.waiting_name)
 async def handle_name(message: Message, state: FSMContext) -> None:
+    if not message.text:
+        await message.answer("Пожалуйста, отправь текстовое сообщение.")
+        return
     await state.update_data(name=message.text.strip()[:100])
     await message.answer("Оставь контакт для связи (телефон или email).")
     await state.set_state(RequestAccess.waiting_contact)
@@ -73,6 +76,9 @@ async def handle_name(message: Message, state: FSMContext) -> None:
 
 @dp.message(RequestAccess.waiting_contact)
 async def handle_contact(message: Message, state: FSMContext) -> None:
+    if not message.text:
+        await message.answer("Пожалуйста, отправь текстовое сообщение.")
+        return
     await state.update_data(contact=message.text.strip()[:200])
     await message.answer("Комментарий (опционально). Если нечего добавить, напиши 'нет'.")
     await state.set_state(RequestAccess.waiting_comment)
@@ -80,6 +86,9 @@ async def handle_contact(message: Message, state: FSMContext) -> None:
 
 @dp.message(RequestAccess.waiting_comment)
 async def handle_comment(message: Message, state: FSMContext) -> None:
+    if not message.text:
+        await message.answer("Пожалуйста, отправь текстовое сообщение.")
+        return
     data = await state.get_data()
     comment = message.text.strip()[:500]
     if comment.lower() == "нет":
@@ -281,7 +290,6 @@ async def admin_peer_update(callback: CallbackQuery) -> None:
     if callback.from_user.id not in ADMIN_IDS:
         await callback.answer("Нет доступа", show_alert=True)
         return
-    await callback.answer("Обрабатываю…")
     logger.info("Admin %s clicked peer action: %s", callback.from_user.id, callback.data)
     try:
         _, _, peer_id_str, new_status = callback.data.split(":")
@@ -294,9 +302,8 @@ async def admin_peer_update(callback: CallbackQuery) -> None:
         await callback.message.answer(f"Peer #{peer_id} -> {new_status}")
     except Exception as exc:
         logger.error("Failed to update peer %s: %s", peer_id, exc)
-        await callback.answer("Ошибка", show_alert=True)
-        return
-    await callback.answer("Готово")
+        await callback.message.answer(f"Ошибка обновления peer #{peer_id}")
+    await callback.answer()
 
 
 async def main() -> None:

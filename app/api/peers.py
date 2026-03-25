@@ -7,7 +7,7 @@ from sqlmodel import select
 from app.audit import record_audit
 from app.api.deps import AdminDep, DBSession
 from app.crypto import decrypt_private_key, encrypt_private_key
-from app.models import Config, Peer, PeerStatus
+from app.models import Config, Peer, PeerStatus, TrafficStat
 from app.schemas import ConfigRead, PeerCreate, PeerRead, PeerStatusUpdate
 from app.wg import WireGuardManager
 
@@ -49,7 +49,7 @@ async def create_peer(
         address=address,
         allowed_ips=allowed_ips,
         status=PeerStatus.active,
-        speed_limit_mbps=payload.speed_limit_mbps or 20,
+        speed_limit_mbps=payload.speed_limit_mbps if payload.speed_limit_mbps is not None else 20,
     )
     session.add(peer)
     await session.commit()
@@ -93,18 +93,21 @@ async def update_peer(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Peer not found")
 
     peer.status = payload.status
-    if payload.speed_limit_mbps:
+    if payload.speed_limit_mbps is not None:
         peer.speed_limit_mbps = payload.speed_limit_mbps
     peer.updated_at = datetime.utcnow()
 
     if peer.status == PeerStatus.banned:
-        await wg.remove_peer(peer.public_key)
         peer_snapshot = PeerRead.model_validate(peer)
+        # Delete TrafficStat rows first (FK constraint)
+        ts_res = await session.exec(select(TrafficStat).where(TrafficStat.peer_id == peer_id))
+        for ts in ts_res.all():
+            await session.delete(ts)
+        # Delete Config rows
         cfg_res = await session.exec(select(Config).where(Config.peer_id == peer_id))
         for cfg in cfg_res.all():
             await session.delete(cfg)
-        await session.delete(peer)
-        await session.commit()
+        # Record audit before deleting the peer
         await record_audit(
             session,
             action="peer_delete",
@@ -113,6 +116,10 @@ async def update_peer(
             ip=request.client.host if request.client else None,
             meta={"status": "banned"},
         )
+        await session.delete(peer)
+        await session.commit()
+        # Remove from WireGuard after successful DB commit
+        await wg.remove_peer(peer_snapshot.public_key)
         return peer_snapshot
     elif peer.status == PeerStatus.disabled:
         await wg.apply_peer(peer.public_key, allowed_ips="")
