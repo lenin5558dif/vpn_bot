@@ -52,7 +52,7 @@ class TrafficPoller:
     async def collect(self) -> None:
         try:
             proc = await asyncio.create_subprocess_exec(
-                "wg", "show", self.interface, "transfer",
+                "awg", "show", self.interface, "transfer",
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )

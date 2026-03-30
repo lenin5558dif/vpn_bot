@@ -26,7 +26,7 @@ async def health() -> dict:
 
     try:
         proc = await asyncio.create_subprocess_exec(
-            "wg", "show", settings.wg_interface,
+            "awg", "show", settings.wg_interface,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )

@@ -8,8 +8,8 @@ set -euo pipefail
 
 APP_DIR="/root/VPN_TG_APP"
 VENV_DIR="$APP_DIR/.venv"
-WG_IFACE="wg0"
-WG_PORT="51820"
+WG_IFACE="awg0"
+WG_PORT="443"
 WG_NETWORK="10.10.0.0/24"
 WG_SERVER_IP="10.10.0.1/24"
 
@@ -58,8 +58,10 @@ ADMIN_USERNAME="${ADMIN_USERNAME:-admin}"
 # -----------------------------------------------------------
 info "Устанавливаю системные пакеты..."
 apt-get update -qq
+add-apt-repository -y ppa:amnezia/ppa > /dev/null 2>&1
+apt-get update -qq
 apt-get install -y -qq python3 python3-venv python3-pip \
-    wireguard wireguard-tools iproute2 iptables curl > /dev/null
+    amneziawg amneziawg-tools wireguard-tools iproute2 iptables curl > /dev/null
 
 # -----------------------------------------------------------
 # 4. Настройка WireGuard
@@ -69,7 +71,7 @@ if [[ ! -f /etc/wireguard/${WG_IFACE}.conf ]]; then
 
     # Генерация ключей
     umask 077
-    wg genkey | tee /etc/wireguard/server_private.key | wg pubkey > /etc/wireguard/server_public.key
+    awg genkey | tee /etc/wireguard/server_private.key | awg pubkey > /etc/wireguard/server_public.key
 
     SERVER_PRIVATE_KEY=$(cat /etc/wireguard/server_private.key)
     SERVER_PUBLIC_KEY=$(cat /etc/wireguard/server_public.key)
@@ -86,6 +88,15 @@ SaveConfig = true
 PostUp = iptables -A FORWARD -i %i -j ACCEPT; iptables -A FORWARD -o %i -j ACCEPT; iptables -t nat -A POSTROUTING -o ${DEFAULT_IFACE} -j MASQUERADE
 PostDown = iptables -D FORWARD -i %i -j ACCEPT; iptables -D FORWARD -o %i -j ACCEPT; iptables -t nat -D POSTROUTING -o ${DEFAULT_IFACE} -j MASQUERADE
 ListenPort = ${WG_PORT}
+Jc = 4
+Jmin = 40
+Jmax = 70
+S1 = 0
+S2 = 0
+H1 = 1
+H2 = 2
+H3 = 3
+H4 = 4
 PrivateKey = ${SERVER_PRIVATE_KEY}
 WGEOF
 
@@ -94,11 +105,11 @@ WGEOF
     sysctl -p /etc/sysctl.d/99-wg-forward.conf > /dev/null
 
     # Запуск WireGuard
-    systemctl enable --now wg-quick@${WG_IFACE}
+    systemctl enable --now awg-quick@${WG_IFACE}
     info "WireGuard запущен на порту ${WG_PORT}"
 else
     info "WireGuard уже настроен, пропускаю"
-    SERVER_PUBLIC_KEY=$(cat /etc/wireguard/server_public.key 2>/dev/null || wg show ${WG_IFACE} public-key)
+    SERVER_PUBLIC_KEY=$(cat /etc/wireguard/server_public.key 2>/dev/null || awg show ${WG_IFACE} public-key)
 fi
 
 # Внешний IP сервера

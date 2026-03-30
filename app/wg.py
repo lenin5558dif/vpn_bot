@@ -19,7 +19,7 @@ class WireGuardManager:
     async def generate_keys(self) -> tuple[str, str]:
         try:
             proc = await asyncio.create_subprocess_exec(
-                "wg", "genkey",
+                "awg", "genkey",
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
@@ -27,7 +27,7 @@ class WireGuardManager:
             private_key = stdout.decode().strip()
 
             proc2 = await asyncio.create_subprocess_exec(
-                "wg", "pubkey",
+                "awg", "pubkey",
                 stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
@@ -64,7 +64,16 @@ class WireGuardManager:
             f"PrivateKey = {private_key}\n"
             f"Address = {address}\n"
             "DNS = 1.1.1.1\n"
-            f"MTU = {settings.wg_mtu}\n\n"
+            f"MTU = {settings.wg_mtu}\n"
+            "Jc = 4\n"
+            "Jmin = 40\n"
+            "Jmax = 70\n"
+            "S1 = 0\n"
+            "S2 = 0\n"
+            "H1 = 1\n"
+            "H2 = 2\n"
+            "H3 = 3\n"
+            "H4 = 4\n\n"
             "[Peer]\n"
             f"PublicKey = {settings.server_public_key}\n"
             f"Endpoint = {settings.wg_endpoint}\n"
@@ -75,7 +84,7 @@ class WireGuardManager:
     async def apply_peer(self, public_key: str, allowed_ips: str) -> None:
         try:
             proc = await asyncio.create_subprocess_exec(
-                "wg", "set", self.interface,
+                "awg", "set", self.interface,
                 "peer", public_key,
                 "allowed-ips", allowed_ips,
                 stdout=asyncio.subprocess.PIPE,
@@ -90,7 +99,7 @@ class WireGuardManager:
     async def remove_peer(self, public_key: str) -> None:
         try:
             proc = await asyncio.create_subprocess_exec(
-                "wg", "set", self.interface,
+                "awg", "set", self.interface,
                 "peer", public_key, "remove",
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
