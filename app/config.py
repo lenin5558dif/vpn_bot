@@ -5,7 +5,7 @@ from pydantic import BaseModel
 
 class Settings(BaseSettings):
     # Database
-    database_url: str = "postgresql+asyncpg://vpnapp:vpnapp@localhost:5432/vpnapp"
+    database_url: str = "sqlite+aiosqlite:///./vpnapp.sqlite"
 
     # Backend
     backend_host: str = "0.0.0.0"
@@ -13,7 +13,6 @@ class Settings(BaseSettings):
     backend_url: str = "http://localhost:8000"
     jwt_secret: str = "change_me"
     jwt_alg: str = "HS256"
-    env: str = "development"
     admin_username: str = "admin"
     admin_password: str = ""
     admin_password_hash: str = ""
