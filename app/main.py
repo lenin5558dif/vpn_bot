@@ -74,8 +74,12 @@ async def security_headers(request: Request, call_next) -> Response:
 @app.middleware("http")
 async def limit_request_size(request: Request, call_next) -> Response:
     content_length = request.headers.get("content-length")
-    if content_length and int(content_length) > 1_000_000:
-        return Response("Request too large", status_code=413)
+    if content_length:
+        try:
+            if int(content_length) > 1_000_000:
+                return Response("Request too large", status_code=413)
+        except ValueError:
+            return Response("Invalid content-length", status_code=400)
     return await call_next(request)
 
 
