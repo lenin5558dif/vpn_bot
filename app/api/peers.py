@@ -136,6 +136,37 @@ async def update_peer(
     return PeerRead.model_validate(peer)
 
 
+@router.get("/online")
+async def online_peers(session: DBSession, admin: AdminDep) -> list[dict]:
+    """Return peers with recent handshake (< 3 minutes)."""
+    _ = admin
+    import time
+    handshakes = await wg.get_latest_handshakes()
+    now = int(time.time())
+    peers_res = await session.exec(select(Peer))
+    peers = peers_res.all()
+
+    # Get user names
+    from app.models import User
+    users_res = await session.exec(select(User))
+    users_map = {u.id: u.name for u in users_res.all()}
+
+    total = len(peers)
+    online = []
+    for peer in peers:
+        ts = handshakes.get(peer.public_key, 0)
+        if ts > 0 and (now - ts) < 180:  # 3 minutes
+            online.append({
+                "peer_id": peer.id,
+                "user_id": peer.user_id,
+                "name": users_map.get(peer.user_id, "?"),
+                "address": peer.address,
+                "seconds_ago": now - ts,
+            })
+    online.sort(key=lambda x: x["seconds_ago"])
+    return [{"total": total, "online_count": len(online), "peers": online}]
+
+
 @router.get("/{peer_id}/config", response_model=ConfigRead)
 async def get_config(peer_id: int, session: DBSession, admin: AdminDep) -> ConfigRead:
     _ = admin

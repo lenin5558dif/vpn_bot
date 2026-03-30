@@ -216,6 +216,10 @@ async def admin_menu(message: Message) -> None:
             [InlineKeyboardButton(text="Все заявки", callback_data="admin:req:all")],
             [InlineKeyboardButton(text="Пиры", callback_data="admin:peers")],
             [InlineKeyboardButton(text="Пользователи", callback_data="admin:users")],
+            [InlineKeyboardButton(text="Онлайн", callback_data="admin:online")],
+            [InlineKeyboardButton(text="Трафик 24ч", callback_data="admin:traffic")],
+            [InlineKeyboardButton(text="Топ трафик", callback_data="admin:top")],
+            [InlineKeyboardButton(text="Сервер", callback_data="admin:server")],
             [InlineKeyboardButton(text="Health", callback_data="admin:health")],
         ]
     )
@@ -252,6 +256,10 @@ ADMIN_MENU_ACTIONS = {
     "admin:req:all",
     "admin:peers",
     "admin:users",
+    "admin:online",
+    "admin:traffic",
+    "admin:top",
+    "admin:server",
     "admin:health",
 }
 
@@ -297,6 +305,53 @@ async def admin_actions(callback: CallbackQuery) -> None:
     elif action == "admin:users":
         users = await backend.list_users()
         await callback.message.answer(f"Пользователи:\n{_format_users(users)}")
+    elif action == "admin:online":
+        data = await backend.get_online_peers()
+        lines = [f"Онлайн: {data['online_count']}/{data['total']}"]
+        for p in data.get("peers", []):
+            ago = p["seconds_ago"]
+            if ago < 60:
+                ago_str = f"{ago} сек"
+            else:
+                ago_str = f"{ago // 60} мин"
+            lines.append(f"  {p['name']} ({p['address']}) — {ago_str} назад")
+        if not data.get("peers"):
+            lines.append("  Никого нет")
+        await callback.message.answer("\n".join(lines))
+    elif action == "admin:traffic":
+        items = await backend.get_traffic_summary(hours=24)
+        lines = ["Трафик за 24ч:"]
+        for item in items:
+            rx_gb = item["rx"] / (1024 ** 3)
+            tx_gb = item["tx"] / (1024 ** 3)
+            name = item.get("name", f"user#{item['user_id']}")
+            lines.append(f"  {name}: {rx_gb:.1f} GB / {tx_gb:.1f} GB")
+        if len(items) == 0:
+            lines.append("  Нет данных")
+        await callback.message.answer("\n".join(lines))
+    elif action == "admin:top":
+        items = await backend.get_traffic_summary(hours=24)
+        ranked = sorted(items, key=lambda x: x["rx"] + x["tx"], reverse=True)[:5]
+        lines = ["Топ-5 за 24ч:"]
+        for i, item in enumerate(ranked, 1):
+            total_gb = (item["rx"] + item["tx"]) / (1024 ** 3)
+            name = item.get("name", f"user#{item['user_id']}")
+            lines.append(f"  {i}. {name} — {total_gb:.1f} GB")
+        if not ranked:
+            lines.append("  Нет данных")
+        await callback.message.answer("\n".join(lines))
+    elif action == "admin:server":
+        stats = await backend.get_server_stats()
+        text = (
+            f"Сервер:\n"
+            f"  CPU: {stats['cpu_pct']}% ({stats['cpu_cores']} core)\n"
+            f"  RAM: {stats['ram_used_mb']}/{stats['ram_total_mb']} MB\n"
+            f"  Disk: {stats['disk_used_gb']}/{stats['disk_total_gb']} GB\n"
+            f"  Uptime: {stats['uptime']}\n"
+            f"  Пиров: {stats['peers_total']}\n"
+            f"  TrafficStat: {stats['trafficstat_rows']} строк"
+        )
+        await callback.message.answer(text)
     elif action == "admin:health":
         health = await backend.health()
         await callback.message.answer(f"Health: {health}")

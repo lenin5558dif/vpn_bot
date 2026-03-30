@@ -134,3 +134,16 @@ class BackendClient:
         resp = await client.get("/health")
         resp.raise_for_status()
         return resp.json()
+
+    async def get_traffic_summary(self, hours: int = 24) -> list[dict[str, Any]]:
+        resp = await self._request_with_auth("GET", "/traffic/summary", params={"hours": hours})
+        return resp.json()
+
+    async def get_online_peers(self) -> dict[str, Any]:
+        resp = await self._request_with_auth("GET", "/peers/online")
+        data = resp.json()
+        return data[0] if data else {"total": 0, "online_count": 0, "peers": []}
+
+    async def get_server_stats(self) -> dict[str, Any]:
+        resp = await self._request_with_auth("GET", "/stats/server")
+        return resp.json()

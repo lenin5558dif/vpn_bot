@@ -48,8 +48,13 @@ async def test_list_traffic_pagination(client, admin_headers, session):
 
 @pytest.mark.asyncio
 async def test_traffic_summary(client, admin_headers, session):
+    from app.models import User, Role
+    user = User(name="Test User", role=Role.user)
+    session.add(user)
+    await session.commit()
+    await session.refresh(user)
     peer = Peer(
-        user_id=1, iface="wg0", public_key="pk", private_key_enc="enc",
+        user_id=user.id, iface="wg0", public_key="pk", private_key_enc="enc",
         address="10.10.0.2/32", allowed_ips="10.10.0.2/32", status=PeerStatus.active,
     )
     session.add(peer)
@@ -63,6 +68,7 @@ async def test_traffic_summary(client, admin_headers, session):
     data = resp.json()
     assert len(data) == 1
     assert data[0]["rx"] == 50
+    assert data[0]["name"] == "Test User"
 
 
 @pytest.mark.asyncio

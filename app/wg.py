@@ -155,6 +155,27 @@ class WireGuardManager:
         except Exception:
             logger.exception("Failed to remove speed limit for %s", address)
 
+    async def get_latest_handshakes(self) -> dict[str, int]:
+        """Return {public_key: unix_timestamp} from awg show latest-handshakes."""
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "awg", "show", self.interface, "latest-handshakes",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, _ = await proc.communicate()
+            if proc.returncode != 0:
+                return {}
+            result: dict[str, int] = {}
+            for line in stdout.decode().splitlines():
+                parts = line.split()
+                if len(parts) == 2 and parts[1].isdigit():
+                    result[parts[0]] = int(parts[1])
+            return result
+        except Exception:
+            logger.warning("Failed to get latest handshakes")
+            return {}
+
     @staticmethod
     def _class_id(address: str) -> str:
         """Derive tc class id from IP address (last two octets as hex)."""

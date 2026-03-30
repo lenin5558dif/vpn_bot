@@ -5,7 +5,7 @@ from sqlalchemy import func
 from sqlmodel import select
 
 from app.api.deps import AdminDep, DBSession
-from app.models import Peer, TrafficStat
+from app.models import Peer, TrafficStat, User
 from app.schemas import TrafficRead
 
 router = APIRouter(prefix="/traffic", tags=["traffic"])
@@ -43,12 +43,14 @@ async def traffic_summary(
             Peer.user_id,
             Peer.address,
             Peer.status,
+            User.name,
             func.sum(TrafficStat.delta_rx).label("rx"),
             func.sum(TrafficStat.delta_tx).label("tx"),
         )
         .join(Peer, Peer.id == TrafficStat.peer_id)
+        .join(User, User.id == Peer.user_id)
         .where(TrafficStat.ts >= since)
-        .group_by(TrafficStat.peer_id, Peer.user_id, Peer.address, Peer.status)
+        .group_by(TrafficStat.peer_id, Peer.user_id, Peer.address, Peer.status, User.name)
     )
     return [
         {
@@ -56,8 +58,9 @@ async def traffic_summary(
             "user_id": row[1],
             "address": row[2],
             "status": row[3],
-            "rx": row[4] or 0,
-            "tx": row[5] or 0,
+            "name": row[4],
+            "rx": row[5] or 0,
+            "tx": row[6] or 0,
         }
         for row in res.all()
     ]
