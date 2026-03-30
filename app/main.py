@@ -21,8 +21,26 @@ poller = TrafficPoller(SessionLocal, settings.wg_interface)
 limiter = Limiter(key_func=get_remote_address)
 
 
+def _validate_config() -> None:
+    """Fail fast if required settings are missing."""
+    errors = []
+    if not settings.encryption_key:
+        errors.append("ENCRYPTION_KEY is not set")
+    if not settings.server_public_key:
+        errors.append("SERVER_PUBLIC_KEY is not set")
+    if not settings.admin_password_hash:
+        errors.append("ADMIN_PASSWORD_HASH is not set")
+    if not settings.bot_api_key:
+        errors.append("BOT_API_KEY is not set")
+    if errors:
+        for e in errors:
+            logger.error("CONFIG ERROR: %s", e)
+        raise RuntimeError("Missing required config: " + "; ".join(errors))
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    _validate_config()
     await init_db()
     poller.start()
     yield

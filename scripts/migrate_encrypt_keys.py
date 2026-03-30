@@ -18,7 +18,8 @@ async def migrate() -> None:
         peers = res.all()
         migrated = 0
         for peer in peers:
-            if peer.private_key_enc.startswith("gA"):
+            # Fernet tokens are ~120+ chars and start with "gA"; WG keys are ~44 chars
+            if len(peer.private_key_enc) > 80 and peer.private_key_enc.startswith("gA"):
                 continue
             peer.private_key_enc = encrypt_private_key(peer.private_key_enc)
             session.add(peer)
