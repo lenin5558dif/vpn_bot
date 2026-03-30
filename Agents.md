@@ -1,71 +1,57 @@
 # Instructions for AI agents working on VPN_TG_APP
 
 ## Architecture
-- **Backend**: FastAPI (async) + SQLModel + PostgreSQL + PyJWT + Fernet encryption
+- **Backend**: FastAPI (async) + SQLModel + SQLite + PyJWT + Fernet encryption
 - **Bot**: aiogram 3 + httpx (shared client with connection pooling)
 - **WireGuard**: managed via async subprocess (`asyncio.create_subprocess_exec`)
-- **Docker**: 3 services (db, backend, bot), hardened (cap_drop ALL, read_only, non-root)
+- **Deploy**: systemd services on Ubuntu VPS, no Docker
+- **Target**: 50-150 users on single server
 
 ## Do
-- Keep server safety: никогда не выкладывайте ключи WireGuard, BOT_TOKEN, пароли и содержимое `.env` в ответы.
-- При деплое на сервер (`/root/VPN_TG_APP`): используйте systemd сервисы (`vpn-backend`, `vpn-bot`); после правок перезапускайте их через `systemctl restart`.
+- Keep server safety: никогда не выкладывайте ключи WireGuard, BOT_TOKEN, пароли и содержимое `.env`.
+- При деплое: используйте `deploy.sh` или systemd сервисы (`vpn-backend`, `vpn-bot`).
 - **Безопасность**:
-  - Все приватные ключи WireGuard шифруются Fernet (`app/crypto.py`) перед записью в БД.
-  - JWT используют PyJWT (не python-jose!) с обязательными claims: `exp`, `sub`, `iss`, `aud`.
+  - WG ключи шифруются Fernet (`app/crypto.py`).
+  - JWT через PyJWT (не python-jose!) с claims: `exp`, `sub`, `iss`, `aud`.
   - `ADMIN_PASSWORD_HASH` обязателен — plaintext fallback удалён.
-  - Bot API Key проверяется через `hmac.compare_digest` (timing-safe).
-  - Все пользовательские данные в frontend экранируются через `esc()`.
+  - Bot API Key проверяется через `hmac.compare_digest`.
+  - Frontend: все данные экранируются через `esc()`.
 - **Качество кода**:
   - `record_audit()` только добавляет запись — commit делает вызывающий код.
-  - Upsert для пользователей: при повторном tg_id возвращается существующий пользователь.
+  - Upsert пользователей по tg_id.
   - Все callback_data парсятся в try/except.
   - FSM-хэндлеры проверяют `message.text` и `message.from_user` на None.
-  - Backend-вызовы из бота обёрнуты в try/except с уведомлением пользователя.
+  - Backend-вызовы из бота обёрнуты в try/except.
 - **Производительность**:
-  - Используйте column projection (`select(Model.field)`) вместо `select(Model)` где нужны не все поля.
-  - SQL GROUP BY для агрегаций, не Python-циклы.
-  - Bulk DELETE через `sqlalchemy.delete()`, не ORM-циклы.
-  - Все subprocess-вызовы — async (`asyncio.create_subprocess_exec`).
-- Бот:
-  - Админ-меню доступно только ID из `ADMIN_IDS`.
-  - Кнопки «Отключить/Активировать/Забанить» вызывают PATCH на `/peers/{id}`.
-  - При выдаче конфига отправляется файл `VPN_<имя_фамилия_транслитом>.conf`.
-- Сохраняйте настройки и пути:
-  - Рабочая директория на сервере: `/root/VPN_TG_APP`.
-  - WG конфиг: `/etc/wireguard/wg0.conf`.
+  - Column projection вместо `select(Model)`.
+  - SQL GROUP BY для агрегаций.
+  - Bulk DELETE через `sqlalchemy.delete()`.
+  - Все subprocess — async.
 
 ## Don't
-- Не публикуйте секреты (.env, ключи wg, токены) в сообщениях/логах.
 - Не используйте `python-jose` — заменён на `PyJWT` из-за CVE.
-- Не используйте `subprocess.check_output` / `subprocess.check_call` — только `asyncio.create_subprocess_exec`.
-- Не добавляйте `session.commit()` в `record_audit` — commit управляется вызывающим кодом.
-- Не используйте `innerHTML` без экранирования через `esc()` во frontend.
-- Не храните plaintext пароли — только bcrypt-хэши.
-- Не меняйте серверный адрес WG подсети на адрес клиента.
-- Не отключайте MASQUERADE/forward правила без явной задачи.
-- Не запускайте destructive команды (reset, rm -rf) в /root вне проекта.
+- Не используйте `subprocess.check_output` — только `asyncio.create_subprocess_exec`.
+- Не добавляйте `session.commit()` в `record_audit`.
+- Не используйте `innerHTML` без `esc()` во frontend.
+- Не храните plaintext пароли.
+- Не публикуйте секреты в коде или логах.
 
 ## Testing
-- 174 теста, 90% покрытие.
+- 181 тест, 90% покрытие.
 - Запуск: `pytest tests/ -v --cov=app --cov=bot --cov=scripts`
-- Тесты используют SQLite (aiosqlite), WireGuard-вызовы мокаются.
-- conftest.py автоматически создаёт/дропает таблицы для каждого теста.
-- При добавлении нового кода — добавляйте тесты.
+- SQLite для тестов, WireGuard мокается.
+- При добавлении кода — добавляйте тесты.
 
 ## Key files
 | Файл | Роль |
 |---|---|
-| `app/security.py` | JWT (PyJWT) + bcrypt auth, iss/aud claims |
-| `app/crypto.py` | Fernet encrypt/decrypt для WG private keys |
-| `app/api/deps.py` | DI: DBSession, AdminDep, BotKeyDep (hmac.compare_digest) |
-| `app/tasks.py` | TrafficPoller: async subprocess, N+1-free, cleanup |
-| `app/wg.py` | WireGuardManager: async subprocess |
-| `app/api/peers.py` | CRUD пиров: column projection, bulk delete, Fernet |
-| `bot/backend.py` | HTTP-клиент: shared httpx, token refresh, retry on 401 |
-| `bot/main.py` | FSM-хэндлеры, админ-меню, error handling |
-
-## Tips
-- Если кнопки в боте не работают, проверьте callback данные и хэндлеры.
-- При сетевых проблемах клиента: порт 51820/udp, peer != 10.10.0.1, MASQUERADE на eth0.
-- При добавлении новой логики — обновляйте DOCS.md и тесты.
-- `ENV=production` отключает /docs, /redoc, /openapi.json.
+| `deploy.sh` | Автоматический деплой на Ubuntu |
+| `app/security.py` | JWT (PyJWT) + bcrypt, iss/aud claims |
+| `app/crypto.py` | Fernet encrypt/decrypt для WG ключей |
+| `app/api/deps.py` | DI: DBSession, AdminDep, BotKeyDep |
+| `app/tasks.py` | TrafficPoller: async, N+1-free, cleanup |
+| `app/wg.py` | WireGuardManager: async subprocess + tc |
+| `app/logging_config.py` | Structured JSON logging |
+| `app/api/peers.py` | CRUD пиров: projection, bulk delete, Fernet |
+| `bot/backend.py` | HTTP-клиент: shared httpx, retry on 401 |
+| `bot/main.py` | FSM, админ-меню, error handling |
