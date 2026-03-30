@@ -16,7 +16,9 @@ from app.config import get_settings
 from app.schemas import RequestStatus
 from bot.backend import BackendClient
 
-logging.basicConfig(level=logging.INFO)
+from app.logging_config import setup_logging
+
+setup_logging()
 logger = logging.getLogger(__name__)
 
 settings = get_settings()

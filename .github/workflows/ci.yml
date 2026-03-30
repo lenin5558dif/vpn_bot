@@ -1,0 +1,63 @@
+name: CI
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+    branches: [master, main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    env:
+      DATABASE_URL: "sqlite+aiosqlite:///./test.sqlite"
+      JWT_SECRET: "ci-test-jwt-secret-32bytes-long!"
+      ADMIN_USERNAME: "admin"
+      ADMIN_PASSWORD: "testpass"
+      ENCRYPTION_KEY: "placeholder"
+      BOT_API_KEY: "ci-test-bot-api-key"
+      BOT_TOKEN: "000000000:AAFakeTokenForCI"
+      ADMIN_IDS: "123456789"
+      SERVER_PUBLIC_KEY: "dGVzdHB1YmxpY2tleQ=="
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: pip install -r requirements-dev.txt
+
+      - name: Generate test secrets
+        run: |
+          HASH=$(python -c "from passlib.context import CryptContext; print(CryptContext(schemes=['bcrypt']).hash('testpass'))")
+          KEY=$(python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())")
+          echo "ADMIN_PASSWORD_HASH=$HASH" >> "$GITHUB_ENV"
+          echo "ENCRYPTION_KEY=$KEY" >> "$GITHUB_ENV"
+
+      - name: Run tests with coverage
+        run: pytest tests/ -v --cov=app --cov=bot --cov=scripts --cov-report=term-missing --cov-fail-under=85
+
+  docker:
+    runs-on: ubuntu-latest
+    needs: test
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build Docker image
+        env:
+          IMAGE_TAG: vpn-tg-app:ci
+        run: docker build -t "$IMAGE_TAG" .
+
+      - name: Verify image
+        env:
+          IMAGE_TAG: vpn-tg-app:ci
+        run: |
+          SIZE=$(docker image inspect "$IMAGE_TAG" --format='{{.Size}}')
+          echo "Image size: $((SIZE / 1024 / 1024)) MB"

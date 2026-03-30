@@ -1,6 +1,11 @@
+import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request, Response
+
+from app.logging_config import setup_logging
+
+setup_logging()
 from fastapi.middleware.cors import CORSMiddleware
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
@@ -17,9 +22,14 @@ poller = TrafficPoller(SessionLocal, settings.wg_interface)
 limiter = Limiter(key_func=get_remote_address)
 
 
+logger = logging.getLogger(__name__)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    await init_db()
+    if settings.env != "production":
+        logger.warning("Running create_all (dev mode). Use 'alembic upgrade head' in production.")
+        await init_db()
     poller.start()
     yield
     await poller.stop()

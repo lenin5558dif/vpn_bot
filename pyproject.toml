@@ -1,0 +1,26 @@
+[project]
+name = "vpn-tg-app"
+version = "1.0.0"
+description = "WireGuard VPN management via Telegram bot + FastAPI"
+requires-python = ">=3.11"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+filterwarnings = [
+    "ignore::DeprecationWarning:passlib",
+    "ignore::PendingDeprecationWarning:starlette",
+]
+
+[tool.coverage.run]
+source = ["app", "bot", "scripts"]
+omit = ["tests/*"]
+
+[tool.coverage.report]
+show_missing = true
+fail_under = 85
+exclude_lines = [
+    "pragma: no cover",
+    "if __name__ == .__main__.",
+    "raise NotImplementedError",
+]

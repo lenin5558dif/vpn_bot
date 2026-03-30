@@ -102,4 +102,66 @@ class WireGuardManager:
             logger.exception("Failed to remove peer %s", public_key)
 
     async def apply_speed_limit(self, address: str, mbit: int) -> None:
-        _ = (address, mbit)
+        """Apply per-peer speed limit using tc (traffic control).
+
+        Creates an HTB qdisc on the WG interface and adds a class + filter
+        for the peer IP. Idempotent: deletes existing filter before adding.
+        """
+        if mbit <= 0:
+            await self.remove_speed_limit(address)
+            return
+        try:
+            # Ensure root qdisc exists (htb). Ignore error if already exists.
+            await self._tc(
+                "qdisc", "add", "dev", self.interface,
+                "root", "handle", "1:", "htb", "default", "999",
+            )
+            # Create a class for this peer (use last octet as class id)
+            class_id = self._class_id(address)
+            # Delete existing class (ignore error if not exists)
+            await self._tc("class", "del", "dev", self.interface, "classid", f"1:{class_id}")
+            # Add class with rate limit
+            await self._tc(
+                "class", "add", "dev", self.interface,
+                "parent", "1:", "classid", f"1:{class_id}",
+                "htb", "rate", f"{mbit}mbit", "ceil", f"{mbit}mbit",
+            )
+            # Add filter to match peer IP to this class
+            await self._tc(
+                "filter", "add", "dev", self.interface,
+                "parent", "1:", "protocol", "ip", "prio", "1",
+                "u32", "match", "ip", "dst", f"{address}/32",
+                "flowid", f"1:{class_id}",
+            )
+            logger.info("Speed limit %d mbit applied to %s (class 1:%s)", mbit, address, class_id)
+        except Exception:
+            logger.exception("Failed to apply speed limit for %s", address)
+
+    async def remove_speed_limit(self, address: str) -> None:
+        """Remove per-peer speed limit."""
+        try:
+            class_id = self._class_id(address)
+            await self._tc("class", "del", "dev", self.interface, "classid", f"1:{class_id}")
+            logger.info("Speed limit removed for %s", address)
+        except Exception:
+            logger.exception("Failed to remove speed limit for %s", address)
+
+    @staticmethod
+    def _class_id(address: str) -> str:
+        """Derive tc class id from IP address (last two octets as hex)."""
+        parts = address.split(".")
+        return format(int(parts[-1]), "x")
+
+    async def _tc(self, *args: str) -> None:
+        """Run a tc command, log errors but don't raise."""
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "tc", *args,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            _, stderr = await proc.communicate()
+            if proc.returncode != 0:
+                logger.debug("tc %s returned %d: %s", " ".join(args), proc.returncode, stderr.decode().strip())
+        except Exception:
+            logger.debug("tc command unavailable: tc %s", " ".join(args))
