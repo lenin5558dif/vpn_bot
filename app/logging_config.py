@@ -34,7 +34,7 @@ def setup_logging() -> None:
     root.setLevel(level)
 
     # Set app-specific loggers
-    for name in ("app", "bot", "uvicorn", "gunicorn"):
+    for name in ("app", "bot", "uvicorn"):
         logger = logging.getLogger(name)
         logger.setLevel(level)
 
