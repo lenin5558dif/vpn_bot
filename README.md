@@ -15,12 +15,14 @@ Telegram-бот для управления VPN-доступом на базе A
 | | Минимум | Рекомендуется |
 |---|---|---|
 | ОС | Ubuntu 22.04 LTS | Ubuntu 22.04 / 24.04 LTS |
-| CPU | 1 vCPU | 1–2 vCPU |
-| RAM | 512 MB | 1–2 GB |
+| CPU | 1 vCPU | 1 vCPU |
+| RAM | 512 MB | **2 GB** |
 | Диск | 10 GB SSD | 20 GB SSD |
 | Сеть | 100 Mbps | 1 Gbps, 2+ TB/мес |
 
-Рекомендуемый провайдер: **[Cloudzy](https://cloudzy.com)**, локация **United States**.
+Рекомендуемые провайдеры:
+- **[Cloudzy](https://cloudzy.com)** — локация USA, международные карты и крипта
+- **[RUVDS.com](https://ruvds.com)** — российские карты/СБП, локации в Европе и США
 
 ### Что нужно заранее
 - SSH-доступ к серверу (логин `root`)
