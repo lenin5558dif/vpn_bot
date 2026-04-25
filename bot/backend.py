@@ -147,3 +147,14 @@ class BackendClient:
     async def get_server_stats(self) -> dict[str, Any]:
         resp = await self._request_with_auth("GET", "/stats/server")
         return resp.json()
+
+    async def get_user_by_tg_id(self, tg_id: int) -> dict[str, Any] | None:
+        users = await self.list_users()
+        for u in users:
+            if u.get("tg_id") == tg_id:
+                return u
+        return None
+
+    async def get_requests_by_user_id(self, user_id: int) -> list[dict[str, Any]]:
+        reqs = await self.list_requests()
+        return [r for r in reqs if r.get("user_id") == user_id]

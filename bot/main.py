@@ -2,7 +2,6 @@ import asyncio
 import logging
 import os
 import tempfile
-from typing import Optional
 import re
 
 from aiogram import Bot, Dispatcher, F
@@ -15,7 +14,6 @@ from aiogram.types.input_file import FSInputFile
 from app.config import get_settings
 from app.schemas import RequestStatus
 from bot.backend import BackendClient
-
 from app.logging_config import setup_logging
 
 setup_logging()
@@ -29,6 +27,23 @@ bot = Bot(token=settings.bot_token)
 dp = Dispatcher()
 backend = BackendClient()
 ADMIN_IDS = {int(x) for x in (settings.admin_ids or "").split(",") if x}
+
+AMNEZIAWG_INSTRUCTION = (
+    "📱 <b>Как подключиться:</b>\n\n"
+    "1. Скачай приложение <b>AmneziaWG</b>:\n"
+    '   • <a href="https://apps.apple.com/app/amneziawg/id1600529900">iOS — App Store</a>\n'
+    '   • <a href="https://play.google.com/store/apps/details?id=org.amnezia.awg">Android — Google Play</a>\n\n'
+    "2. Открой приложение → нажми <b>«+»</b> → <b>«Импорт из файла»</b>\n"
+    "3. Выбери полученный .conf файл\n"
+    "4. Включи VPN переключателем\n\n"
+    "Возникли проблемы? Напишите администратору."
+)
+
+REQUEST_STATUS_TEXT = {
+    "new": "⏳ Заявка на рассмотрении — ожидай ответа администратора",
+    "approved": "✅ Заявка одобрена — конфиг был отправлен тебе в чат",
+    "rejected": "❌ Заявка отклонена — свяжись с администратором",
+}
 
 CYR_TO_LAT = {
     "а": "a", "б": "b", "в": "v", "г": "g", "д": "d", "е": "e", "ё": "e",
@@ -59,12 +74,74 @@ class RequestAccess(StatesGroup):
     waiting_comment = State()
 
 
+# ─── Клиентские команды ──────────────────────────────────────────────────────
+
 @dp.message(CommandStart())
 async def cmd_start(message: Message, state: FSMContext) -> None:
     await state.clear()
+    if not message.from_user:
+        return
+    tg_id = message.from_user.id
+
+    try:
+        user = await backend.get_user_by_tg_id(tg_id)
+        if user:
+            reqs = await backend.get_requests_by_user_id(user["id"])
+            if reqs:
+                latest = sorted(reqs, key=lambda r: r.get("id", 0), reverse=True)[0]
+                status = latest.get("status", "")
+                status_text = REQUEST_STATUS_TEXT.get(status, status)
+                if status == "new":
+                    await message.answer(
+                        f"У тебя уже есть активная заявка.\n{status_text}\n\n"
+                        "Хочешь подать новую? — /newrequest"
+                    )
+                    return
+                elif status == "approved":
+                    await message.answer(
+                        f"{status_text}.\n\n"
+                        "Если потерял конфиг — напиши администратору.\n"
+                        "Подать новую заявку: /newrequest"
+                    )
+                    return
+    except Exception as exc:
+        logger.warning("Could not check existing requests for tg_id=%s: %s", tg_id, exc)
+
     await message.answer("Привет! Введи, пожалуйста, своё имя и фамилию.")
     await state.set_state(RequestAccess.waiting_name)
 
+
+@dp.message(Command("newrequest"))
+async def cmd_newrequest(message: Message, state: FSMContext) -> None:
+    await state.clear()
+    await message.answer("Введи своё имя и фамилию.")
+    await state.set_state(RequestAccess.waiting_name)
+
+
+@dp.message(Command("status"))
+async def cmd_status(message: Message) -> None:
+    if not message.from_user:
+        return
+    tg_id = message.from_user.id
+    try:
+        user = await backend.get_user_by_tg_id(tg_id)
+        if not user:
+            await message.answer("Заявок не найдено. Напишите /start чтобы подать заявку.")
+            return
+        reqs = await backend.get_requests_by_user_id(user["id"])
+        if not reqs:
+            await message.answer("Заявок не найдено. Напишите /start чтобы подать заявку.")
+            return
+        latest = sorted(reqs, key=lambda r: r.get("id", 0), reverse=True)[0]
+        status = latest.get("status", "unknown")
+        status_text = REQUEST_STATUS_TEXT.get(status, status)
+        await message.answer(f"Статус твоей заявки:\n{status_text}")
+    except Exception as exc:
+        logger.error("Status check failed for tg_id=%s: %s", tg_id, exc)
+        await message.answer("Не удалось получить статус. Попробуй позже.")
+
+
+# ─── FSM: сбор данных заявки ─────────────────────────────────────────────────
 
 @dp.message(RequestAccess.waiting_name)
 async def handle_name(message: Message, state: FSMContext) -> None:
@@ -82,8 +159,22 @@ async def handle_contact(message: Message, state: FSMContext) -> None:
         await message.answer("Пожалуйста, отправь текстовое сообщение.")
         return
     await state.update_data(contact=message.text.strip()[:200])
-    await message.answer("Комментарий (опционально). Если нечего добавить, напиши 'нет'.")
+    kb = InlineKeyboardMarkup(
+        inline_keyboard=[[InlineKeyboardButton(text="Пропустить", callback_data="skip_comment")]]
+    )
+    await message.answer(
+        "Комментарий (опционально). Если нечего добавить — нажми «Пропустить».",
+        reply_markup=kb,
+    )
     await state.set_state(RequestAccess.waiting_comment)
+
+
+@dp.callback_query(F.data == "skip_comment", RequestAccess.waiting_comment)
+async def skip_comment(callback: CallbackQuery, state: FSMContext) -> None:
+    if callback.message:
+        await callback.message.edit_reply_markup(reply_markup=None)
+    await _submit_request(callback.message, state, comment="", tg_id=callback.from_user.id)
+    await callback.answer()
 
 
 @dp.message(RequestAccess.waiting_comment)
@@ -91,16 +182,19 @@ async def handle_comment(message: Message, state: FSMContext) -> None:
     if not message.text:
         await message.answer("Пожалуйста, отправь текстовое сообщение.")
         return
-    data = await state.get_data()
-    comment = message.text.strip()[:500]
-    if comment.lower() == "нет":
-        comment = ""
-    name = data.get("name")
-    contact = data.get("contact")
     if not message.from_user:
         await message.answer("Не удалось определить отправителя.")
         return
-    tg_id = message.from_user.id
+    comment = message.text.strip()[:500]
+    if comment.lower() == "нет":
+        comment = ""
+    await _submit_request(message, state, comment=comment, tg_id=message.from_user.id)
+
+
+async def _submit_request(message: Message, state: FSMContext, comment: str, tg_id: int) -> None:
+    data = await state.get_data()
+    name = data.get("name")
+    contact = data.get("contact")
 
     try:
         user = await backend.create_user({"name": name, "contact": contact, "tg_id": tg_id})
@@ -115,27 +209,24 @@ async def handle_comment(message: Message, state: FSMContext) -> None:
 
     kb = InlineKeyboardMarkup(
         inline_keyboard=[
-            [
-                InlineKeyboardButton(
-                    text="Одобрить",
-                    callback_data=f"approve:{req['id']}:{user['id']}:{tg_id}",
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    text="Отказать",
-                    callback_data=f"reject:{req['id']}:{user['id']}:{tg_id}",
-                )
-            ],
+            [InlineKeyboardButton(text="✅ Одобрить", callback_data=f"approve:{req['id']}:{user['id']}:{tg_id}")],
+            [InlineKeyboardButton(text="❌ Отказать", callback_data=f"reject:{req['id']}:{user['id']}:{tg_id}")],
         ]
     )
-    text = f"Новая заявка #{req['id']}\nИмя: {name}\nКонтакт: {contact}\nКомментарий: {comment}"
+    text = (
+        f"📋 Новая заявка #{req['id']}\n"
+        f"👤 Имя: {name}\n"
+        f"📞 Контакт: {contact}\n"
+        f"💬 Комментарий: {comment or '—'}"
+    )
     for admin_id in ADMIN_IDS:
         try:
             await bot.send_message(admin_id, text, reply_markup=kb)
         except Exception as exc:
             logger.error("Failed to notify admin %s: %s", admin_id, exc)
 
+
+# ─── Одобрение / отказ ───────────────────────────────────────────────────────
 
 async def _ensure_admin(callback: CallbackQuery) -> bool:
     if callback.from_user.id not in ADMIN_IDS:
@@ -159,16 +250,15 @@ async def approve_request(callback: CallbackQuery) -> None:
     await backend.update_request(req_id, RequestStatus.approved)
     peer = await backend.create_peer(user_id)
     config_text = await backend.get_config(peer["id"])
+
     filename_slug = "user"
     try:
         user = await backend.get_user(user_id)
-        filename_slug = translit_slug(user.get("name") or "")
-        if not filename_slug:
-            filename_slug = "user"
+        filename_slug = translit_slug(user.get("name") or "") or "user"
     except Exception as exc:
         logger.error("Failed to fetch user for filename: %s", exc)
 
-    await bot.send_message(tg_id, "Доступ одобрен. Вот твой конфиг:")
+    await bot.send_message(tg_id, "✅ Доступ одобрен! Вот твой конфиг:")
 
     tmp_path = None
     try:
@@ -179,12 +269,18 @@ async def approve_request(callback: CallbackQuery) -> None:
         await bot.send_document(tg_id, input_file, caption="Импортируй файл в приложение AmneziaWG")
     except Exception as exc:
         logger.error("Failed to send config file: %s", exc)
+    finally:
+        if tmp_path and os.path.exists(tmp_path):
+            try:
+                os.remove(tmp_path)
+            except Exception:
+                pass
 
-    if tmp_path and os.path.exists(tmp_path):
-        try:
-            os.remove(tmp_path)
-        except Exception:
-            pass
+    try:
+        await bot.send_message(tg_id, AMNEZIAWG_INSTRUCTION, parse_mode="HTML", disable_web_page_preview=True)
+    except Exception as exc:
+        logger.error("Failed to send instruction: %s", exc)
+
     await callback.answer("Одобрено")
 
 
@@ -204,6 +300,8 @@ async def reject_request(callback: CallbackQuery) -> None:
     await bot.send_message(tg_id, "К сожалению, доступ отклонён. Свяжитесь с админом для подробностей.")
     await callback.answer("Отказано")
 
+
+# ─── Админ-меню ──────────────────────────────────────────────────────────────
 
 @dp.message(Command("admin"))
 async def admin_menu(message: Message) -> None:
@@ -227,40 +325,29 @@ async def admin_menu(message: Message) -> None:
 
 
 def _format_requests(items: list[dict]) -> str:
+    if not items:
+        return "Пусто"
     lines = []
     for r in items[:15]:
         lines.append(
-            f"#{r.get('id')} user={r.get('user_id')} status={r.get('status')} created={r.get('created_at')}"
+            f"#{r.get('id')} user={r.get('user_id')} "
+            f"status={r.get('status')} created={r.get('created_at')}"
         )
-    return "\n".join(lines) if lines else "Пусто"
-
-
-def _format_peers(items: list[dict]) -> str:
-    lines = []
-    for p in items[:15]:
-        lines.append(
-            f"#{p.get('id')} user={p.get('user_id')} {p.get('address')} status={p.get('status')} speed={p.get('speed_limit_mbps')}mbit"
-        )
-    return "\n".join(lines) if lines else "Пусто"
+    return "\n".join(lines)
 
 
 def _format_users(items: list[dict]) -> str:
+    if not items:
+        return "Пусто"
     lines = []
     for u in items[:15]:
         lines.append(f"#{u.get('id')} {u.get('name')} contact={u.get('contact')}")
-    return "\n".join(lines) if lines else "Пусто"
+    return "\n".join(lines)
 
 
 ADMIN_MENU_ACTIONS = {
-    "admin:req:new",
-    "admin:req:all",
-    "admin:peers",
-    "admin:users",
-    "admin:online",
-    "admin:traffic",
-    "admin:top",
-    "admin:server",
-    "admin:health",
+    "admin:req:new", "admin:req:all", "admin:peers", "admin:users",
+    "admin:online", "admin:traffic", "admin:top", "admin:server", "admin:health",
 }
 
 
@@ -270,54 +357,51 @@ async def admin_actions(callback: CallbackQuery) -> None:
         await callback.answer("Нет доступа", show_alert=True)
         return
     action = callback.data
+
     if action == "admin:req:new":
         reqs = await backend.list_requests(status="new")
         await callback.message.answer(f"Новые заявки:\n{_format_requests(reqs)}")
+
     elif action == "admin:req:all":
         reqs = await backend.list_requests()
         await callback.message.answer(f"Все заявки:\n{_format_requests(reqs)}")
+
     elif action == "admin:peers":
         peers = await backend.list_peers()
-        await callback.message.answer(f"Пиры (первые {min(len(peers), 20)}):")
+        await callback.message.answer(f"Пиры ({min(len(peers), 20)} из {len(peers)}):")
+        status_icon = {"active": "🟢", "disabled": "🔴", "banned": "⛔"}
         for p in peers[:20]:
-            text = f"peer #{p.get('id')} user={p.get('user_id')} {p.get('address')} status={p.get('status')} speed={p.get('speed_limit_mbps')}mbit"
+            icon = status_icon.get(p.get("status", ""), "⚪")
+            text = (
+                f"{icon} Peer #{p.get('id')} | {p.get('address')}\n"
+                f"👤 user={p.get('user_id')} | ⚡ {p.get('speed_limit_mbps')} Мбит/с"
+            )
             kb = InlineKeyboardMarkup(
                 inline_keyboard=[
                     [
-                        InlineKeyboardButton(
-                            text="Отключить",
-                            callback_data=f"admin:peer:{p.get('id')}:disabled",
-                        ),
-                        InlineKeyboardButton(
-                            text="Активировать",
-                            callback_data=f"admin:peer:{p.get('id')}:active",
-                        ),
+                        InlineKeyboardButton(text="🔴 Откл.", callback_data=f"admin:peer:{p.get('id')}:disabled"),
+                        InlineKeyboardButton(text="🟢 Вкл.", callback_data=f"admin:peer:{p.get('id')}:active"),
                     ],
-                    [
-                        InlineKeyboardButton(
-                            text="Забанить",
-                            callback_data=f"admin:peer:{p.get('id')}:banned",
-                        ),
-                    ],
+                    [InlineKeyboardButton(text="⛔ Забанить", callback_data=f"admin:peer:ban_ask:{p.get('id')}")],
                 ]
             )
             await callback.message.answer(text, reply_markup=kb)
+
     elif action == "admin:users":
         users = await backend.list_users()
         await callback.message.answer(f"Пользователи:\n{_format_users(users)}")
+
     elif action == "admin:online":
         data = await backend.get_online_peers()
         lines = [f"Онлайн: {data['online_count']}/{data['total']}"]
         for p in data.get("peers", []):
             ago = p["seconds_ago"]
-            if ago < 60:
-                ago_str = f"{ago} сек"
-            else:
-                ago_str = f"{ago // 60} мин"
+            ago_str = f"{ago} сек" if ago < 60 else f"{ago // 60} мин"
             lines.append(f"  {p['name']} ({p['address']}) — {ago_str} назад")
         if not data.get("peers"):
             lines.append("  Никого нет")
         await callback.message.answer("\n".join(lines))
+
     elif action == "admin:traffic":
         items = await backend.get_traffic_summary(hours=24)
         lines = ["Трафик за 24ч:"]
@@ -325,10 +409,11 @@ async def admin_actions(callback: CallbackQuery) -> None:
             rx_gb = item["rx"] / (1024 ** 3)
             tx_gb = item["tx"] / (1024 ** 3)
             name = item.get("name", f"user#{item['user_id']}")
-            lines.append(f"  {name}: {rx_gb:.1f} GB / {tx_gb:.1f} GB")
-        if len(items) == 0:
+            lines.append(f"  {name}: ↓{rx_gb:.1f} ГБ / ↑{tx_gb:.1f} ГБ")
+        if not items:
             lines.append("  Нет данных")
         await callback.message.answer("\n".join(lines))
+
     elif action == "admin:top":
         items = await backend.get_traffic_summary(hours=24)
         ranked = sorted(items, key=lambda x: x["rx"] + x["tx"], reverse=True)[:5]
@@ -336,10 +421,11 @@ async def admin_actions(callback: CallbackQuery) -> None:
         for i, item in enumerate(ranked, 1):
             total_gb = (item["rx"] + item["tx"]) / (1024 ** 3)
             name = item.get("name", f"user#{item['user_id']}")
-            lines.append(f"  {i}. {name} — {total_gb:.1f} GB")
+            lines.append(f"  {i}. {name} — {total_gb:.1f} ГБ")
         if not ranked:
             lines.append("  Нет данных")
         await callback.message.answer("\n".join(lines))
+
     elif action == "admin:server":
         stats = await backend.get_server_stats()
         text = (
@@ -352,18 +438,70 @@ async def admin_actions(callback: CallbackQuery) -> None:
             f"  TrafficStat: {stats['trafficstat_rows']} строк"
         )
         await callback.message.answer(text)
+
     elif action == "admin:health":
         health = await backend.health()
         await callback.message.answer(f"Health: {health}")
+
     await callback.answer()
 
 
+# ─── Бан с подтверждением (регистрируем ДО общего peer-хэндлера) ─────────────
+
+@dp.callback_query(F.data.startswith("admin:peer:ban_ask:"))
+async def admin_ban_ask(callback: CallbackQuery) -> None:
+    if not await _ensure_admin(callback):
+        return
+    try:
+        peer_id = int(callback.data.split(":")[-1])
+    except (ValueError, IndexError):
+        await callback.answer("Некорректный запрос", show_alert=True)
+        return
+    kb = InlineKeyboardMarkup(
+        inline_keyboard=[[
+            InlineKeyboardButton(text="⛔ Да, забанить", callback_data=f"admin:peer:ban_ok:{peer_id}"),
+            InlineKeyboardButton(text="Отмена", callback_data=f"admin:peer:ban_cancel:{peer_id}"),
+        ]]
+    )
+    await callback.message.answer(
+        f"⚠️ Забанить peer #{peer_id}?\n"
+        "Пользователь немедленно потеряет доступ. Действие необратимо.",
+        reply_markup=kb,
+    )
+    await callback.answer()
+
+
+@dp.callback_query(F.data.startswith("admin:peer:ban_ok:"))
+async def admin_ban_confirm(callback: CallbackQuery) -> None:
+    if not await _ensure_admin(callback):
+        return
+    try:
+        peer_id = int(callback.data.split(":")[-1])
+    except (ValueError, IndexError):
+        await callback.answer("Некорректный запрос", show_alert=True)
+        return
+    try:
+        await backend.update_peer_status(peer_id, "banned")
+        await callback.message.answer(f"⛔ Peer #{peer_id} забанен.")
+    except Exception as exc:
+        logger.error("Failed to ban peer %s: %s", peer_id, exc)
+        await callback.message.answer(f"Ошибка при бане peer #{peer_id}")
+    await callback.answer()
+
+
+@dp.callback_query(F.data.startswith("admin:peer:ban_cancel:"))
+async def admin_ban_cancel(callback: CallbackQuery) -> None:
+    await callback.message.answer("Бан отменён.")
+    await callback.answer()
+
+
+# ─── Управление пирами (отключить / активировать) ────────────────────────────
+
 @dp.callback_query(F.data.startswith("admin:peer:"))
 async def admin_peer_update(callback: CallbackQuery) -> None:
-    if callback.from_user.id not in ADMIN_IDS:
-        await callback.answer("Нет доступа", show_alert=True)
+    if not await _ensure_admin(callback):
         return
-    logger.info("Admin %s clicked peer action: %s", callback.from_user.id, callback.data)
+    logger.info("Admin %s peer action: %s", callback.from_user.id, callback.data)
     try:
         _, _, peer_id_str, new_status = callback.data.split(":")
         peer_id = int(peer_id_str)
@@ -372,7 +510,8 @@ async def admin_peer_update(callback: CallbackQuery) -> None:
         return
     try:
         await backend.update_peer_status(peer_id, new_status)
-        await callback.message.answer(f"Peer #{peer_id} -> {new_status}")
+        icon = {"active": "🟢", "disabled": "🔴"}.get(new_status, "")
+        await callback.message.answer(f"{icon} Peer #{peer_id} → {new_status}")
     except Exception as exc:
         logger.error("Failed to update peer %s: %s", peer_id, exc)
         await callback.message.answer(f"Ошибка обновления peer #{peer_id}")
