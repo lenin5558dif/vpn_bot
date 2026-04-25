@@ -252,7 +252,76 @@ systemctl enable --now vpn-backend.service vpn-bot.service
 sleep 3
 
 # -----------------------------------------------------------
-# 10. Проверка
+# 10. Безопасность: UFW + fail2ban
+# -----------------------------------------------------------
+info "Настраиваю файрвол (UFW)..."
+apt-get install -y -qq ufw > /dev/null
+
+# Сброс до умолчаний без интерактивного подтверждения
+ufw --force reset > /dev/null
+
+ufw default deny incoming
+ufw default allow outgoing
+
+# SSH
+ufw allow 22/tcp comment 'SSH'
+
+# AmneziaWG (WireGuard)
+ufw allow ${WG_PORT}/udp comment 'AmneziaWG'
+
+# Включаем без интерактивного подтверждения
+ufw --force enable
+info "UFW включён: разрешены 22/tcp (SSH) и ${WG_PORT}/udp (WireGuard)"
+
+# -----------------------------------------------------------
+info "Настраиваю fail2ban (постоянный бан SSH)..."
+apt-get install -y -qq fail2ban > /dev/null
+
+cat > /etc/fail2ban/jail.d/ssh-progressive.conf << F2BEOF
+# Уровень 1: 5 неудачных попыток за 10 мин → бан на 30 минут
+[sshd]
+enabled  = true
+backend  = systemd
+port     = ssh
+maxretry = 5
+findtime = 600
+bantime  = 1800
+
+# Уровень 2: 2 бана уровня 1 за 24 ч → бан на 24 часа
+[recidive]
+enabled   = true
+logpath   = /var/log/fail2ban.log
+banaction = iptables-allports
+protocol  = all
+port      = all
+filter    = recidive
+maxretry  = 2
+findtime  = 86400
+bantime   = 86400
+
+# Уровень 3: 2 бана уровня 2 за 7 дней → бан навсегда
+[recidive-permanent]
+enabled   = true
+logpath   = /var/log/fail2ban.log
+banaction = iptables-allports
+protocol  = all
+port      = all
+filter    = recidive
+maxretry  = 4
+findtime  = 604800
+bantime   = -1
+F2BEOF
+
+# fail2ban должен писать в файл (для recidive)
+sed -i 's|^#logtarget.*|logtarget = /var/log/fail2ban.log|; s|^logtarget.*|logtarget = /var/log/fail2ban.log|' \
+    /etc/fail2ban/fail2ban.conf 2>/dev/null || true
+
+systemctl enable --now fail2ban
+systemctl restart fail2ban
+info "fail2ban: SSH — прогрессивный бан: 30 мин → 24 ч → навсегда (без восстановления)"
+
+# -----------------------------------------------------------
+# 11. Проверка
 # -----------------------------------------------------------
 info "Проверяю..."
 
@@ -288,9 +357,15 @@ echo "    systemctl restart vpn-backend vpn-bot"
 echo "    journalctl -u vpn-backend -f"
 echo "    journalctl -u vpn-bot -f"
 echo ""
+echo "  Безопасность:"
+echo "    ufw status verbose"
+echo "    fail2ban-client status sshd"
+echo "    fail2ban-client set sshd unbanip <IP>   # разбанить вручную"
+echo ""
 echo "  Файлы:"
 echo "    Код:    ${APP_DIR}"
 echo "    .env:   ${APP_DIR}/.env"
 echo "    БД:     ${APP_DIR}/vpnapp.sqlite"
 echo "    WG:     /etc/wireguard/${WG_IFACE}.conf"
+echo "    f2b:    /etc/fail2ban/jail.d/ssh-progressive.conf"
 echo ""

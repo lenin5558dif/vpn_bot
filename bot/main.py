@@ -176,7 +176,7 @@ async def approve_request(callback: CallbackQuery) -> None:
             tmp.write(config_text)
             tmp_path = tmp.name
         input_file = FSInputFile(tmp_path, filename=f"VPN_{filename_slug}.conf")
-        await bot.send_document(tg_id, input_file, caption="Импортируй файл в WireGuard")
+        await bot.send_document(tg_id, input_file, caption="Импортируй файл в приложение AmneziaWG")
     except Exception as exc:
         logger.error("Failed to send config file: %s", exc)
 
