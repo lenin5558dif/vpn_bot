@@ -146,6 +146,8 @@ fail2ban-client set sshd unbanip <IP>
 
 ## Безопасность
 
+> **SSH:** по умолчанию сервер принимает вход по паролю. Для продакшена рекомендуется перейти на SSH-ключи — подробнее в [INSTALL.md → раздел 8](INSTALL.md#8-безопасность-ssh-ключи-vs-пароль).
+
 - WG-ключи пиров зашифрованы Fernet в SQLite — plaintext нигде не хранится
 - JWT с обязательными claims: `exp`, `sub`, `iss`, `aud`
 - Bot API Key проверяется через `hmac.compare_digest` (timing-safe)
