@@ -10,11 +10,23 @@ Telegram-бот для управления VPN-доступом на базе A
 
 ## Быстрый старт
 
-### Требования
-- Ubuntu 22.04+ с публичным IP
-- SSH-доступ от root
-- Telegram Bot Token ([@BotFather](https://t.me/BotFather))
-- Ваш Telegram ID ([@userinfobot](https://t.me/userinfobot))
+### Требования к серверу
+
+| | Минимум | Рекомендуется |
+|---|---|---|
+| ОС | Ubuntu 22.04 LTS | Ubuntu 22.04 / 24.04 LTS |
+| CPU | 1 vCPU | 1–2 vCPU |
+| RAM | 512 MB | 1–2 GB |
+| Диск | 10 GB SSD | 20 GB SSD |
+| Сеть | 100 Mbps | 1 Gbps, 2+ TB/мес |
+
+Рекомендуемый провайдер: **[Cloudzy](https://cloudzy.com)**, локация **United States**.
+
+### Что нужно заранее
+- SSH-доступ к серверу (логин `root`)
+- Telegram Bot Token — [@BotFather](https://t.me/BotFather)
+- Ваш Telegram ID — [@userinfobot](https://t.me/userinfobot)
+- Придуманный пароль для веб-панели
 
 ### Установка
 
