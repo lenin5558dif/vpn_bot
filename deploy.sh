@@ -66,11 +66,12 @@ apt-get install -y -qq python3 python3-venv python3-pip \
 # -----------------------------------------------------------
 # 4. Настройка WireGuard
 # -----------------------------------------------------------
-if [[ ! -f /etc/wireguard/${WG_IFACE}.conf ]]; then
+if [[ ! -f /etc/wireguard/${WG_IFACE}.conf ]] && [[ ! -f /etc/amnezia/amneziawg/${WG_IFACE}.conf ]]; then
     info "Настраиваю WireGuard..."
 
     # Генерация ключей
     umask 077
+    mkdir -p /etc/wireguard
     awg genkey | tee /etc/wireguard/server_private.key | awg pubkey > /etc/wireguard/server_public.key
 
     SERVER_PRIVATE_KEY=$(cat /etc/wireguard/server_private.key)
@@ -99,6 +100,11 @@ H3 = 3
 H4 = 4
 PrivateKey = ${SERVER_PRIVATE_KEY}
 WGEOF
+
+    # Ubuntu 24.04: awg-quick ищет конфиг в /etc/amnezia/amneziawg/
+    mkdir -p /etc/amnezia/amneziawg
+    ln -sf /etc/wireguard/${WG_IFACE}.conf /etc/amnezia/amneziawg/${WG_IFACE}.conf
+    info "Симлинк /etc/amnezia/amneziawg/${WG_IFACE}.conf → /etc/wireguard/${WG_IFACE}.conf (совместимость Ubuntu 24.04)"
 
     # IP forwarding
     echo "net.ipv4.ip_forward=1" > /etc/sysctl.d/99-wg-forward.conf
