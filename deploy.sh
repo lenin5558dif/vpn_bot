@@ -280,51 +280,61 @@ ufw --force enable
 info "UFW включён: разрешены 22/tcp (SSH) и ${WG_PORT}/udp (WireGuard)"
 
 # -----------------------------------------------------------
-info "Настраиваю fail2ban (постоянный бан SSH)..."
+info "Настраиваю fail2ban (4-уровневый прогрессивный бан SSH)..."
 apt-get install -y -qq fail2ban > /dev/null
 
-cat > /etc/fail2ban/jail.d/ssh-progressive.conf << F2BEOF
-# Уровень 1: 5 неудачных попыток за 10 мин → бан на 30 минут
+# fail2ban должен писать в файл (нужно для recidive-фильтров)
+sed -i 's|^logtarget.*|logtarget = /var/log/fail2ban.log|' \
+    /etc/fail2ban/fail2ban.conf 2>/dev/null || true
+
+cat > /etc/fail2ban/jail.local << F2BEOF
+[DEFAULT]
+banaction = iptables-multiport
+
+# Уровень 1: 3 ошибки за 10 мин → бан 20 минут
 [sshd]
 enabled  = true
-backend  = systemd
 port     = ssh
-maxretry = 5
+logpath  = %(sshd_log)s
+backend  = systemd
+maxretry = 3
 findtime = 600
-bantime  = 1800
+bantime  = 1200
 
-# Уровень 2: 2 бана уровня 1 за 24 ч → бан на 24 часа
-[recidive]
+# Уровень 2: 2 бана за 1 час → бан 3 часа
+[recidive-3h]
 enabled   = true
-logpath   = /var/log/fail2ban.log
-banaction = iptables-allports
-protocol  = all
-port      = all
 filter    = recidive
+logpath   = /var/log/fail2ban.log
 maxretry  = 2
-findtime  = 86400
-bantime   = 86400
+findtime  = 3600
+bantime   = 10800
+banaction = iptables-allports
 
-# Уровень 3: 2 бана уровня 2 за 7 дней → бан навсегда
+# Уровень 3: 3 бана за 12 часов → бан 24 часа
+[recidive-24h]
+enabled   = true
+filter    = recidive
+logpath   = /var/log/fail2ban.log
+maxretry  = 3
+findtime  = 43200
+bantime   = 86400
+banaction = iptables-allports
+
+# Уровень 4: 4 бана за 2 дня → бан навсегда
 [recidive-permanent]
 enabled   = true
-logpath   = /var/log/fail2ban.log
-banaction = iptables-allports
-protocol  = all
-port      = all
 filter    = recidive
+logpath   = /var/log/fail2ban.log
 maxretry  = 4
-findtime  = 604800
+findtime  = 172800
 bantime   = -1
+banaction = iptables-allports
 F2BEOF
-
-# fail2ban должен писать в файл (для recidive)
-sed -i 's|^#logtarget.*|logtarget = /var/log/fail2ban.log|; s|^logtarget.*|logtarget = /var/log/fail2ban.log|' \
-    /etc/fail2ban/fail2ban.conf 2>/dev/null || true
 
 systemctl enable --now fail2ban
 systemctl restart fail2ban
-info "fail2ban: SSH — прогрессивный бан: 30 мин → 24 ч → навсегда (без восстановления)"
+info "fail2ban: 4 уровня — 20 мин → 3 ч → 24 ч → навсегда"
 
 # -----------------------------------------------------------
 # 11. Проверка
@@ -373,5 +383,5 @@ echo "    Код:    ${APP_DIR}"
 echo "    .env:   ${APP_DIR}/.env"
 echo "    БД:     ${APP_DIR}/vpnapp.sqlite"
 echo "    WG:     /etc/wireguard/${WG_IFACE}.conf"
-echo "    f2b:    /etc/fail2ban/jail.d/ssh-progressive.conf"
+echo "    f2b:    /etc/fail2ban/jail.local"
 echo ""
