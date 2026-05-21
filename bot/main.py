@@ -345,6 +345,15 @@ def _format_users(items: list[dict]) -> str:
     return "\n".join(lines)
 
 
+async def _user_names() -> dict[int, str]:
+    try:
+        users = await backend.list_users()
+    except Exception as exc:
+        logger.error("Failed to fetch users for name map: %s", exc)
+        return {}
+    return {u.get("id"): u.get("name") for u in users}
+
+
 ADMIN_MENU_ACTIONS = {
     "admin:req:new", "admin:req:all", "admin:peers", "admin:users",
     "admin:online", "admin:traffic", "admin:top", "admin:server", "admin:health",
@@ -368,13 +377,16 @@ async def admin_actions(callback: CallbackQuery) -> None:
 
     elif action == "admin:peers":
         peers = await backend.list_peers()
+        names = await _user_names()
         await callback.message.answer(f"Пиры ({min(len(peers), 20)} из {len(peers)}):")
         status_icon = {"active": "🟢", "disabled": "🔴", "banned": "⛔"}
         for p in peers[:20]:
             icon = status_icon.get(p.get("status", ""), "⚪")
+            uid = p.get("user_id")
+            uname = names.get(uid, f"user#{uid}")
             text = (
-                f"{icon} Peer #{p.get('id')} | {p.get('address')}\n"
-                f"👤 user={p.get('user_id')} | ⚡ {p.get('speed_limit_mbps')} Мбит/с"
+                f"{icon} {uname} · Peer #{p.get('id')} | {p.get('address')}\n"
+                f"👤 user={uid} | ⚡ {p.get('speed_limit_mbps')} Мбит/с"
             )
             kb = InlineKeyboardMarkup(
                 inline_keyboard=[
@@ -389,7 +401,36 @@ async def admin_actions(callback: CallbackQuery) -> None:
 
     elif action == "admin:users":
         users = await backend.list_users()
-        await callback.message.answer(f"Пользователи:\n{_format_users(users)}")
+        peers = await backend.list_peers()
+        peers_by_user: dict[int, list[dict]] = {}
+        for p in peers:
+            peers_by_user.setdefault(p.get("user_id"), []).append(p)
+        status_icon = {"active": "🟢", "disabled": "🔴", "banned": "⛔"}
+        await callback.message.answer(f"Пользователи ({min(len(users), 20)} из {len(users)}):")
+        for u in users[:20]:
+            uid = u.get("id")
+            user_peers = peers_by_user.get(uid, [])
+            if user_peers:
+                peer_summary = " ".join(
+                    f"{status_icon.get(pp.get('status', ''), '⚪')}#{pp.get('id')}" for pp in user_peers
+                )
+            else:
+                peer_summary = "нет пиров"
+            text = (
+                f"#{uid} {u.get('name')}\n"
+                f"📞 {u.get('contact') or '—'}\n"
+                f"🔑 {peer_summary}"
+            )
+            if user_peers:
+                kb = InlineKeyboardMarkup(
+                    inline_keyboard=[[
+                        InlineKeyboardButton(text="🔴 Откл. все", callback_data=f"admin:user:{uid}:disabled"),
+                        InlineKeyboardButton(text="🟢 Вкл. все", callback_data=f"admin:user:{uid}:active"),
+                    ]]
+                )
+                await callback.message.answer(text, reply_markup=kb)
+            else:
+                await callback.message.answer(text)
 
     elif action == "admin:online":
         data = await backend.get_online_peers()
@@ -515,6 +556,49 @@ async def admin_peer_update(callback: CallbackQuery) -> None:
     except Exception as exc:
         logger.error("Failed to update peer %s: %s", peer_id, exc)
         await callback.message.answer(f"Ошибка обновления peer #{peer_id}")
+    await callback.answer()
+
+
+# ─── Массовое управление пирами пользователя (по имени) ──────────────────────
+
+@dp.callback_query(F.data.startswith("admin:user:"))
+async def admin_user_toggle(callback: CallbackQuery) -> None:
+    if not await _ensure_admin(callback):
+        return
+    logger.info("Admin %s user action: %s", callback.from_user.id, callback.data)
+    try:
+        _, _, user_id_str, new_status = callback.data.split(":")
+        user_id = int(user_id_str)
+    except Exception:
+        await callback.answer("Некорректный запрос", show_alert=True)
+        return
+    if new_status not in ("active", "disabled"):
+        await callback.answer("Недопустимый статус", show_alert=True)
+        return
+    try:
+        peers = await backend.list_peers()
+        user_peers = [
+            p for p in peers
+            if p.get("user_id") == user_id and p.get("status") != "banned"
+        ]
+        if not user_peers:
+            await callback.message.answer(f"У #{user_id} нет управляемых пиров (или все забанены).")
+            await callback.answer()
+            return
+        ok = 0
+        for p in user_peers:
+            try:
+                await backend.update_peer_status(p["id"], new_status)
+                ok += 1
+            except Exception as exc:
+                logger.error("Failed to toggle peer %s: %s", p.get("id"), exc)
+        icon = {"active": "🟢", "disabled": "🔴"}.get(new_status, "")
+        await callback.message.answer(
+            f"{icon} #{user_id}: {ok}/{len(user_peers)} пиров → {new_status}"
+        )
+    except Exception as exc:
+        logger.error("Failed to toggle user %s peers: %s", user_id, exc)
+        await callback.message.answer(f"Ошибка при обновлении пиров #{user_id}")
     await callback.answer()
 
 
