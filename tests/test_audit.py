@@ -2,17 +2,22 @@ import pytest
 from sqlmodel import select
 
 from app.audit import record_audit
-from app.models import AuditLog
+from app.models import AuditLog, Role, User
 
 
 @pytest.mark.asyncio
 async def test_record_audit(session):
+    actor = User(name="Auditor", role=Role.admin)
+    session.add(actor)
+    await session.commit()
+    await session.refresh(actor)
+
     await record_audit(
         session,
         action="test_action",
         target_type="peer",
         target_id=1,
-        actor_id=42,
+        actor_id=actor.id,
         ip="127.0.0.1",
         meta={"key": "value"},
     )
@@ -24,7 +29,7 @@ async def test_record_audit(session):
     assert logs[0].action == "test_action"
     assert logs[0].ip == "127.0.0.1"
     assert logs[0].meta == {"key": "value"}
-    assert logs[0].actor_id == 42
+    assert logs[0].actor_id == actor.id
 
 
 @pytest.mark.asyncio

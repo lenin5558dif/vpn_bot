@@ -13,6 +13,7 @@ from aiogram.types.input_file import FSInputFile
 
 from app.config import get_settings
 from app.schemas import RequestStatus
+from bot.alerts import AlertManager
 from bot.backend import BackendClient
 from app.logging_config import setup_logging
 
@@ -27,6 +28,7 @@ bot = Bot(token=settings.bot_token)
 dp = Dispatcher()
 backend = BackendClient()
 ADMIN_IDS = {int(x) for x in (settings.admin_ids or "").split(",") if x}
+alerts = AlertManager(bot=bot, backend=backend, admin_ids=ADMIN_IDS, settings=settings)
 
 AMNEZIAWG_INSTRUCTION = (
     "📱 <b>Как подключиться:</b>\n\n"
@@ -72,6 +74,10 @@ class RequestAccess(StatesGroup):
     waiting_name = State()
     waiting_contact = State()
     waiting_comment = State()
+
+
+class AdminSearch(StatesGroup):
+    waiting_query = State()
 
 
 # ─── Клиентские команды ──────────────────────────────────────────────────────
@@ -247,9 +253,25 @@ async def approve_request(callback: CallbackQuery) -> None:
         await callback.answer("Некорректные данные", show_alert=True)
         return
 
-    await backend.update_request(req_id, RequestStatus.approved)
-    peer = await backend.create_peer(user_id)
-    config_text = await backend.get_config(peer["id"])
+    try:
+        existing_peers = [
+            p for p in await backend.list_peers(user_id=user_id)
+            if p.get("status") in {"active", "disabled"}
+        ]
+        peer = sorted(existing_peers, key=lambda p: p.get("id", 0), reverse=True)[0] if existing_peers else None
+        if peer is None:
+            peer = await backend.create_peer(user_id)
+        elif peer.get("status") == "disabled":
+            peer = await backend.update_peer_status(int(peer["id"]), "active")
+        config_text = await backend.get_config(peer["id"])
+    except Exception as exc:
+        logger.error("Failed to provision VPN for request %s user %s: %s", req_id, user_id, exc)
+        if callback.message:
+            await callback.message.answer(
+                f"Не удалось выдать VPN для заявки #{req_id}. Заявка не помечена одобренной."
+            )
+        await callback.answer("Ошибка выдачи", show_alert=True)
+        return
 
     filename_slug = "user"
     try:
@@ -258,10 +280,9 @@ async def approve_request(callback: CallbackQuery) -> None:
     except Exception as exc:
         logger.error("Failed to fetch user for filename: %s", exc)
 
-    await bot.send_message(tg_id, "✅ Доступ одобрен! Вот твой конфиг:")
-
     tmp_path = None
     try:
+        await bot.send_message(tg_id, "✅ Доступ одобрен! Вот твой конфиг:")
         with tempfile.NamedTemporaryFile("w+", delete=False, suffix=".conf") as tmp:
             tmp.write(config_text)
             tmp_path = tmp.name
@@ -269,6 +290,12 @@ async def approve_request(callback: CallbackQuery) -> None:
         await bot.send_document(tg_id, input_file, caption="Импортируй файл в приложение AmneziaWG")
     except Exception as exc:
         logger.error("Failed to send config file: %s", exc)
+        if callback.message:
+            await callback.message.answer(
+                f"Конфиг для заявки #{req_id} создан, но не отправлен пользователю. Статус не изменён."
+            )
+        await callback.answer("Ошибка отправки", show_alert=True)
+        return
     finally:
         if tmp_path and os.path.exists(tmp_path):
             try:
@@ -280,6 +307,17 @@ async def approve_request(callback: CallbackQuery) -> None:
         await bot.send_message(tg_id, AMNEZIAWG_INSTRUCTION, parse_mode="HTML", disable_web_page_preview=True)
     except Exception as exc:
         logger.error("Failed to send instruction: %s", exc)
+
+    try:
+        await backend.update_request(req_id, RequestStatus.approved)
+    except Exception as exc:
+        logger.error("Failed to mark request %s approved after provisioning: %s", req_id, exc)
+        if callback.message:
+            await callback.message.answer(
+                f"VPN для заявки #{req_id} выдан, но статус не обновился. Повторное одобрение переиспользует peer #{peer['id']}."
+            )
+        await callback.answer("Выдано, статус не обновлён", show_alert=True)
+        return
 
     await callback.answer("Одобрено")
 
@@ -296,32 +334,437 @@ async def reject_request(callback: CallbackQuery) -> None:
         await callback.answer("Некорректные данные", show_alert=True)
         return
 
-    await backend.update_request(req_id, RequestStatus.rejected)
-    await bot.send_message(tg_id, "К сожалению, доступ отклонён. Свяжитесь с админом для подробностей.")
-    await callback.answer("Отказано")
+    try:
+        await backend.update_request(req_id, RequestStatus.rejected)
+        await bot.send_message(tg_id, "К сожалению, доступ отклонён. Свяжитесь с админом для подробностей.")
+        await callback.answer("Отказано")
+    except Exception as exc:
+        logger.error("Failed to reject request %s: %s", req_id, exc)
+        await callback.answer("Ошибка отказа", show_alert=True)
 
 
 # ─── Админ-меню ──────────────────────────────────────────────────────────────
 
 @dp.message(Command("admin"))
 async def admin_menu(message: Message) -> None:
-    if message.from_user.id not in ADMIN_IDS:
+    if not message.from_user or message.from_user.id not in ADMIN_IDS:
         await message.answer("Нет доступа")
         return
-    kb = InlineKeyboardMarkup(
+    await message.answer("Админ-меню:", reply_markup=_admin_menu_keyboard())
+
+
+def _gb(value: int | float | None) -> float:
+    return float(value or 0) / (1024 ** 3)
+
+
+def _status_icon(status: str | None) -> str:
+    return {"active": "🟢", "disabled": "🔴", "banned": "⛔", "pending": "⚪"}.get(status or "", "⚪")
+
+
+def _admin_menu_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="Новые заявки", callback_data="admin:req:new")],
-            [InlineKeyboardButton(text="Все заявки", callback_data="admin:req:all")],
-            [InlineKeyboardButton(text="Пиры", callback_data="admin:peers")],
-            [InlineKeyboardButton(text="Пользователи", callback_data="admin:users")],
-            [InlineKeyboardButton(text="Онлайн", callback_data="admin:online")],
-            [InlineKeyboardButton(text="Трафик 24ч", callback_data="admin:traffic")],
-            [InlineKeyboardButton(text="Топ трафик", callback_data="admin:top")],
-            [InlineKeyboardButton(text="Сервер", callback_data="admin:server")],
-            [InlineKeyboardButton(text="Health", callback_data="admin:health")],
+            [InlineKeyboardButton(text="👥 Пользователи", callback_data="adm:users:0")],
+            [InlineKeyboardButton(text="🔎 Поиск", callback_data="adm:srch")],
+            [
+                InlineKeyboardButton(text="🆕 Новые заявки", callback_data="admin:req:new"),
+                InlineKeyboardButton(text="📋 Все заявки", callback_data="admin:req:all"),
+            ],
+            [
+                InlineKeyboardButton(text="📊 Трафик", callback_data="admin:traffic"),
+                InlineKeyboardButton(text="🖥 Сервер", callback_data="admin:server"),
+            ],
+            [
+                InlineKeyboardButton(text="🧭 Диагностика", callback_data="adm:diag"),
+                InlineKeyboardButton(text="❤️ Health", callback_data="admin:health"),
+            ],
         ]
     )
-    await message.answer("Админ-меню:", reply_markup=kb)
+
+
+def _user_list_keyboard(data: dict, query: str | None = None) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+    for user in data.get("items", []):
+        counts = user.get("peer_counts", {})
+        active = counts.get("active", 0)
+        total = counts.get("total", 0)
+        label = f"👤 #{user.get('id')} {user.get('name')} · 🟢{active}/{total}"
+        rows.append([InlineKeyboardButton(text=label[:64], callback_data=f"adm:u:{user.get('id')}")])
+
+    offset = int(data.get("offset", 0) or 0)
+    limit = int(data.get("limit", 8) or 8)
+    total = int(data.get("total", 0) or 0)
+    nav: list[InlineKeyboardButton] = []
+    if offset > 0:
+        nav.append(InlineKeyboardButton(text="←", callback_data=f"adm:users:{max(0, offset - limit)}"))
+    page = offset // limit + 1 if limit else 1
+    pages = max(1, (total + limit - 1) // limit) if limit else 1
+    nav.append(InlineKeyboardButton(text=f"{page}/{pages}", callback_data="adm:noop"))
+    if offset + limit < total:
+        nav.append(InlineKeyboardButton(text="→", callback_data=f"adm:users:{offset + limit}"))
+    rows.append(nav)
+    rows.append([
+        InlineKeyboardButton(text="🔎 Поиск", callback_data="adm:srch"),
+        InlineKeyboardButton(text="🏠 Меню", callback_data="adm:menu"),
+    ])
+    if query:
+        rows.append([InlineKeyboardButton(text="Сбросить поиск", callback_data="adm:reset")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def _format_user_list(data: dict, query: str | None = None) -> str:
+    total = int(data.get("total", 0) or 0)
+    title = f"👥 Пользователи: {total}"
+    if query:
+        title += f"\n🔎 Поиск: {query}"
+    lines = [title]
+    if not data.get("items"):
+        lines.append("\nНичего не найдено.")
+        return "\n".join(lines)
+    for user in data.get("items", []):
+        counts = user.get("peer_counts", {})
+        req = user.get("latest_request") or {}
+        lines.append(
+            "\n"
+            f"#{user.get('id')} {user.get('name')}\n"
+            f"📞 {user.get('contact') or '—'} · tg_id={user.get('tg_id') or '—'}\n"
+            f"🔑 Пиры: 🟢{counts.get('active', 0)} 🔴{counts.get('disabled', 0)} "
+            f"⛔{counts.get('banned', 0)} · 24ч {_gb(user.get('traffic_24h_bytes')):.1f} ГБ\n"
+            f"📋 Заявка: {req.get('status', '—')}"
+        )
+    return "\n".join(lines)
+
+
+async def _send_user_list(target: Message | CallbackQuery, offset: int = 0, query: str | None = None) -> None:
+    try:
+        data = await backend.admin_user_list(query=query, limit=8, offset=offset)
+    except Exception as exc:
+        logger.error("Failed to load admin user list: %s", exc)
+        text = "Не удалось загрузить пользователей."
+        kb = _admin_menu_keyboard()
+    else:
+        text = _format_user_list(data, query=query)
+        kb = _user_list_keyboard(data, query=query)
+    if isinstance(target, CallbackQuery):
+        await _edit_or_answer(target, text, kb)
+        await target.answer()
+    else:
+        await target.answer(text, reply_markup=kb)
+
+
+def _user_card_keyboard(card: dict) -> InlineKeyboardMarkup:
+    user = card.get("user", {})
+    user_id = user.get("id")
+    rows: list[list[InlineKeyboardButton]] = []
+    for peer in card.get("peers", []):
+        rows.append([
+            InlineKeyboardButton(
+                text=f"{_status_icon(peer.get('status'))} Peer #{peer.get('id')} · {peer.get('address')}",
+                callback_data=f"adm:pc:{peer.get('id')}:{user_id}",
+            )
+        ])
+    rows.extend([
+        [
+            InlineKeyboardButton(text="➕ Добавить устройство", callback_data=f"adm:add:{user_id}"),
+            InlineKeyboardButton(text="📤 Конфиг", callback_data=f"adm:cfgu:{user_id}"),
+        ],
+        [
+            InlineKeyboardButton(text="🔴 Откл. все", callback_data=f"adm:ub:{user_id}:disabled"),
+            InlineKeyboardButton(text="🟢 Вкл. все", callback_data=f"adm:ub:{user_id}:active"),
+        ],
+        [
+            InlineKeyboardButton(text="🔄 Обновить", callback_data=f"adm:u:{user_id}"),
+            InlineKeyboardButton(text="👥 Назад", callback_data="adm:back"),
+        ],
+    ])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def _format_user_card(card: dict) -> str:
+    user = card.get("user", {})
+    req = card.get("latest_request") or {}
+    wg = card.get("wg", {})
+    lines = [
+        f"👤 {user.get('name')} · #{user.get('id')}",
+        f"Telegram: {user.get('tg_id') or '—'}",
+        f"Контакт: {user.get('contact') or '—'}",
+        f"Заявка: {req.get('status', '—')} #{req.get('id', '—')}",
+        f"WG: {'✅ доступен' if wg.get('available') else '⚠️ недоступен'}",
+        f"Трафик 24ч: {_gb(card.get('traffic_24h_bytes')):.1f} ГБ",
+        "",
+        "Устройства:",
+    ]
+    peers = card.get("peers", [])
+    if not peers:
+        lines.append("  нет устройств")
+    for peer in peers:
+        traffic = peer.get("traffic_24h", {})
+        online = "онлайн" if peer.get("online") else "оффлайн"
+        wg_state = "WG есть" if peer.get("wg_present") else "WG нет"
+        lines.append(
+            f"{_status_icon(peer.get('status'))} #{peer.get('id')} · {peer.get('address')} · "
+            f"{peer.get('speed_limit_mbps')} Мбит/с\n"
+            f"   {online}, {wg_state}, handshake: {peer.get('last_handshake_at') or '—'}\n"
+            f"   24ч ↓{_gb(traffic.get('rx')):.1f} / ↑{_gb(traffic.get('tx')):.1f} ГБ"
+        )
+    return "\n".join(lines)
+
+
+async def _send_user_card(callback: CallbackQuery, user_id: int) -> None:
+    try:
+        card = await backend.admin_user_card(user_id)
+    except Exception as exc:
+        logger.error("Failed to load user card %s: %s", user_id, exc)
+        await callback.answer("Не удалось загрузить карточку", show_alert=True)
+        return
+    await _edit_or_answer(callback, _format_user_card(card), _user_card_keyboard(card))
+    await callback.answer()
+
+
+def _peer_card_keyboard(peer: dict, user_id: int) -> InlineKeyboardMarkup:
+    peer_id = peer.get("id")
+    speed_buttons = [
+        InlineKeyboardButton(text=str(speed), callback_data=f"adm:ps:{peer_id}:{user_id}:{speed}")
+        for speed in (5, 10, 20, 50, 100, 0)
+    ]
+    kb = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="🔴 Отключить", callback_data=f"adm:pa:{peer_id}:disabled"),
+                InlineKeyboardButton(text="🟢 Включить", callback_data=f"adm:pa:{peer_id}:active"),
+            ],
+            speed_buttons[:3],
+            speed_buttons[3:],
+            [
+                InlineKeyboardButton(text="📤 Отправить конфиг", callback_data=f"adm:cfg:{peer_id}:{user_id}"),
+                InlineKeyboardButton(text="⛔ Бан…", callback_data=f"adm:ban?:{peer_id}:{user_id}"),
+            ],
+            [InlineKeyboardButton(text="← Карточка пользователя", callback_data=f"adm:u:{user_id}")],
+        ]
+    )
+    return kb
+
+
+def _format_peer_card(peer: dict) -> str:
+    traffic = peer.get("traffic_24h", {})
+    return (
+        f"🔑 Peer #{peer.get('id')}\n"
+        f"Статус: {_status_icon(peer.get('status'))} {peer.get('status')}\n"
+        f"IP: {peer.get('address')}\n"
+        f"Скорость: {peer.get('speed_limit_mbps')} Мбит/с\n"
+        f"WG: {'есть' if peer.get('wg_present') else 'нет'} · allowed={peer.get('wg_allowed_ips') or '—'}\n"
+        f"Онлайн: {'да' if peer.get('online') else 'нет'}\n"
+        f"Handshake: {peer.get('last_handshake_at') or '—'}\n"
+        f"Трафик 24ч: ↓{_gb(traffic.get('rx')):.1f} / ↑{_gb(traffic.get('tx')):.1f} ГБ"
+    )
+
+
+async def _send_peer_card(callback: CallbackQuery, peer_id: int, user_id: int) -> None:
+    try:
+        card = await backend.admin_user_card(user_id)
+        peer = next((p for p in card.get("peers", []) if int(p.get("id")) == peer_id), None)
+    except Exception as exc:
+        logger.error("Failed to load peer card %s: %s", peer_id, exc)
+        await callback.answer("Не удалось загрузить peer", show_alert=True)
+        return
+    if not peer:
+        await callback.answer("Peer не найден", show_alert=True)
+        return
+    await _edit_or_answer(callback, _format_peer_card(peer), _peer_card_keyboard(peer, user_id))
+    await callback.answer()
+
+
+async def _edit_or_answer(callback: CallbackQuery, text: str, kb: InlineKeyboardMarkup | None = None) -> None:
+    if not callback.message:
+        return
+    try:
+        await callback.message.edit_text(text, reply_markup=kb)
+    except Exception:
+        await callback.message.answer(text, reply_markup=kb)
+
+
+async def _send_config_to_user(peer_id: int, user_id: int) -> None:
+    card = await backend.admin_user_card(user_id)
+    user = card.get("user", {})
+    peer_ids = {int(peer["id"]) for peer in card.get("peers", []) if peer.get("id") is not None}
+    if peer_id not in peer_ids:
+        raise RuntimeError("Peer does not belong to target user")
+    tg_id = user.get("tg_id")
+    if not tg_id:
+        raise RuntimeError("User has no tg_id")
+    config_text = await backend.get_config(peer_id)
+    filename_slug = translit_slug(user.get("name") or "") or "user"
+    tmp_path = None
+    try:
+        with tempfile.NamedTemporaryFile("w+", delete=False, suffix=".conf") as tmp:
+            tmp.write(config_text)
+            tmp_path = tmp.name
+        input_file = FSInputFile(tmp_path, filename=f"VPN_{filename_slug}_peer_{peer_id}.conf")
+        await bot.send_document(tg_id, input_file, caption="VPN-конфиг для AmneziaWG")
+        await bot.send_message(tg_id, AMNEZIAWG_INSTRUCTION, parse_mode="HTML", disable_web_page_preview=True)
+    finally:
+        if tmp_path and os.path.exists(tmp_path):
+            try:
+                os.remove(tmp_path)
+            except Exception:
+                pass
+
+
+async def _diagnostics_text() -> str:
+    health = await backend.health()
+    stats = await backend.get_server_stats()
+    reconcile = await backend.reconcile_peers()
+    counts = reconcile.get("counts", {})
+    return (
+        "🧭 Диагностика\n"
+        f"Backend: {health.get('status')}\n"
+        f"WireGuard: {health.get('checks', {}).get('wireguard', 'unknown')}\n"
+        f"Disk: {stats.get('disk_used_pct', 0)}% "
+        f"({stats.get('disk_used_gb', 0)}/{stats.get('disk_total_gb', 0)} GB)\n"
+        f"Reconcile: {reconcile.get('status')}\n"
+        f"  unknown WG: {counts.get('unknown_wg_peers', 0)}\n"
+        f"  missing WG: {counts.get('missing_wg_peers', 0)}\n"
+        f"  allowed_ips mismatch: {counts.get('allowed_ips_mismatch', 0)}\n"
+        f"  disabled nonempty allowed_ips: {counts.get('disabled_with_allowed_ips', 0)}"
+    )
+
+
+@dp.callback_query(F.data.startswith("adm:"))
+async def admin_card_actions(callback: CallbackQuery, state: FSMContext) -> None:
+    if not await _ensure_admin(callback):
+        return
+    data = callback.data or ""
+    try:
+        parts = data.split(":")
+        action = parts[1]
+    except Exception:
+        await callback.answer("Некорректный запрос", show_alert=True)
+        return
+
+    try:
+        if action == "noop":
+            await callback.answer()
+        elif action == "menu":
+            await state.clear()
+            await _edit_or_answer(callback, "Админ-меню:", _admin_menu_keyboard())
+            await callback.answer()
+        elif action == "users":
+            offset = int(parts[2]) if len(parts) > 2 else 0
+            navigation = await state.get_data()
+            query = navigation.get("admin_query")
+            await state.update_data(admin_offset=offset)
+            await _send_user_list(callback, offset=offset, query=query)
+        elif action == "back":
+            navigation = await state.get_data()
+            await _send_user_list(
+                callback,
+                offset=int(navigation.get("admin_offset") or 0),
+                query=navigation.get("admin_query"),
+            )
+        elif action == "reset":
+            await state.clear()
+            await _send_user_list(callback, offset=0)
+        elif action == "srch":
+            await state.set_state(AdminSearch.waiting_query)
+            if callback.message:
+                await callback.message.answer("Введите имя, контакт, user ID или Telegram ID для поиска.")
+            await callback.answer()
+        elif action == "u":
+            await _send_user_card(callback, int(parts[2]))
+        elif action == "pc":
+            await _send_peer_card(callback, int(parts[2]), int(parts[3]))
+        elif action == "pa":
+            peer_id = int(parts[2])
+            new_status = parts[3]
+            peer = await backend.update_peer_status(peer_id, new_status)
+            await _send_peer_card(callback, peer_id, int(peer["user_id"]))
+        elif action == "ps":
+            peer_id = int(parts[2])
+            user_id = int(parts[3])
+            speed = int(parts[4])
+            await backend.update_peer_status(peer_id, "active", speed_limit_mbps=speed)
+            await _send_peer_card(callback, peer_id, user_id)
+        elif action == "ub":
+            user_id = int(parts[2])
+            new_status = parts[3]
+            await backend.bulk_update_user_peers(user_id, new_status)
+            await _send_user_card(callback, user_id)
+        elif action == "add":
+            user_id = int(parts[2])
+            peer = await backend.create_peer(user_id)
+            try:
+                await _send_config_to_user(int(peer["id"]), user_id)
+            except Exception as exc:
+                logger.error("Failed to send config for new peer %s: %s", peer.get("id"), exc)
+                if callback.message:
+                    await callback.message.answer(f"Peer #{peer.get('id')} создан, но конфиг не отправлен.")
+            await _send_user_card(callback, user_id)
+        elif action == "cfg":
+            peer_id = int(parts[2])
+            user_id = int(parts[3])
+            await _send_config_to_user(peer_id, user_id)
+            await callback.answer("Конфиг отправлен")
+        elif action == "cfgu":
+            user_id = int(parts[2])
+            card = await backend.admin_user_card(user_id)
+            peers = [p for p in card.get("peers", []) if p.get("status") in {"active", "disabled"}]
+            if not peers:
+                await callback.answer("Нет peer для отправки", show_alert=True)
+                return
+            peer = sorted(peers, key=lambda p: p.get("id", 0), reverse=True)[0]
+            await _send_config_to_user(int(peer["id"]), user_id)
+            await callback.answer("Конфиг отправлен")
+        elif action == "ban?":
+            peer_id = int(parts[2])
+            user_id = int(parts[3])
+            kb = InlineKeyboardMarkup(inline_keyboard=[[
+                InlineKeyboardButton(text="⛔ Да, забанить", callback_data=f"adm:ban!:{peer_id}:{user_id}"),
+                InlineKeyboardButton(text="Отмена", callback_data=f"adm:pc:{peer_id}:{user_id}"),
+            ]])
+            await _edit_or_answer(
+                callback,
+                f"⚠️ Забанить peer #{peer_id}? Действие удалит peer из БД и WireGuard.",
+                kb,
+            )
+            await callback.answer()
+        elif action == "ban!":
+            peer_id = int(parts[2])
+            user_id = int(parts[3])
+            await backend.update_peer_status(peer_id, "banned")
+            await _send_user_card(callback, user_id)
+        elif action == "diag":
+            text = await _diagnostics_text()
+            kb = InlineKeyboardMarkup(inline_keyboard=[[
+                InlineKeyboardButton(text="🔄 Обновить", callback_data="adm:diag"),
+                InlineKeyboardButton(text="🏠 Меню", callback_data="adm:menu"),
+            ]])
+            await _edit_or_answer(callback, text, kb)
+            await callback.answer()
+        else:
+            await callback.answer("Неизвестное действие", show_alert=True)
+    except (ValueError, IndexError):
+        await callback.answer("Некорректные данные", show_alert=True)
+    except Exception as exc:
+        logger.error("Admin card action failed for %s: %s", data, exc)
+        await callback.answer("Ошибка действия", show_alert=True)
+
+
+@dp.message(AdminSearch.waiting_query)
+async def admin_search_query(message: Message, state: FSMContext) -> None:
+    if not message.from_user or message.from_user.id not in ADMIN_IDS:
+        await message.answer("Нет доступа")
+        await state.clear()
+        return
+    query = (message.text or "").strip()[:100]
+    await state.set_state(None)
+    await state.update_data(admin_query=query, admin_offset=0)
+    try:
+        data = await backend.admin_user_list(query=query, limit=8, offset=0)
+    except Exception as exc:
+        logger.error("Admin search failed: %s", exc)
+        await message.answer("Поиск временно недоступен.", reply_markup=_admin_menu_keyboard())
+        return
+    await message.answer(_format_user_list(data, query=query), reply_markup=_user_list_keyboard(data, query=query))
 
 
 def _format_requests(items: list[dict]) -> str:
@@ -473,7 +916,7 @@ async def admin_actions(callback: CallbackQuery) -> None:
             f"Сервер:\n"
             f"  CPU: {stats['cpu_pct']}% ({stats['cpu_cores']} core)\n"
             f"  RAM: {stats['ram_used_mb']}/{stats['ram_total_mb']} MB\n"
-            f"  Disk: {stats['disk_used_gb']}/{stats['disk_total_gb']} GB\n"
+            f"  Disk: {stats['disk_used_gb']}/{stats['disk_total_gb']} GB ({stats.get('disk_used_pct', 0)}%)\n"
             f"  Uptime: {stats['uptime']}\n"
             f"  Пиров: {stats['peers_total']}\n"
             f"  TrafficStat: {stats['trafficstat_rows']} строк"
@@ -576,7 +1019,7 @@ async def admin_user_toggle(callback: CallbackQuery) -> None:
         await callback.answer("Недопустимый статус", show_alert=True)
         return
     try:
-        peers = await backend.list_peers()
+        peers = await backend.list_peers(user_id=user_id)
         user_peers = [
             p for p in peers
             if p.get("user_id") == user_id and p.get("status") != "banned"
@@ -604,8 +1047,10 @@ async def admin_user_toggle(callback: CallbackQuery) -> None:
 
 async def main() -> None:
     try:
+        alerts.start()
         await dp.start_polling(bot)
     finally:
+        await alerts.stop()
         await backend.close()
 
 

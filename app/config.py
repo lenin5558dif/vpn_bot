@@ -34,7 +34,20 @@ class Settings(BaseSettings):
     wg_mtu: int = 1420
     wg_keepalive: int = 25
     default_speed_limit_mbit: int = 20
+    max_speed_limit_mbit: int = 1000
+    subprocess_timeout_sec: float = 10.0
     server_public_key: str = ""
+
+    # Bot alerts
+    alerts_enabled: bool = True
+    alerts_health_interval_sec: int = 60
+    alerts_diagnostic_interval_sec: int = 300
+    alerts_failure_threshold: int = 3
+    alerts_traffic_24h_threshold_gb: int = 50
+    alerts_disk_warn_pct: float = 80.0
+    alerts_disk_recovery_pct: float = 75.0
+    alerts_repeat_hours: int = 6
+    alerts_state_file: str = "/var/lib/vpn-tg-app/bot-alerts-state.json"
 
     # CORS
     cors_origins: str = "http://localhost:3000"

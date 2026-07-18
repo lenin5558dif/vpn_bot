@@ -52,7 +52,28 @@ def test_peer_create_valid():
 
 def test_peer_create_allowed_ips_max_length():
     with pytest.raises(ValidationError):
-        PeerCreate(user_id=1, allowed_ips="x" * 51)
+        PeerCreate(user_id=1, allowed_ips="x" * 201)
+
+
+def test_peer_create_allowed_ips_rejects_non_cidr_value():
+    with pytest.raises(ValidationError):
+        PeerCreate(user_id=1, allowed_ips="not-a-network")
+
+
+def test_peer_create_allowed_ips_normalizes_comma_separated_cidrs():
+    p = PeerCreate(user_id=1, allowed_ips="10.10.0.2/32,  192.168.1.0/24")
+
+    assert p.allowed_ips == "10.10.0.2/32, 192.168.1.0/24"
+
+
+def test_peer_create_rejects_speed_limit_above_maximum():
+    with pytest.raises(ValidationError):
+        PeerCreate(user_id=1, speed_limit_mbps=1001)
+
+
+def test_peer_status_update_rejects_negative_speed_limit():
+    with pytest.raises(ValidationError):
+        PeerStatusUpdate(status=PeerStatus.active, speed_limit_mbps=-1)
 
 
 def test_peer_status_update():

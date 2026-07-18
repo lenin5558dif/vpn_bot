@@ -32,6 +32,8 @@ def _validate_config() -> None:
         errors.append("ADMIN_PASSWORD_HASH is not set")
     if not settings.bot_api_key:
         errors.append("BOT_API_KEY is not set")
+    if not settings.jwt_secret or settings.jwt_secret == "change_me" or len(settings.jwt_secret) < 32:
+        errors.append("JWT_SECRET must be set to at least 32 characters")
     if errors:
         for e in errors:
             logger.error("CONFIG ERROR: %s", e)

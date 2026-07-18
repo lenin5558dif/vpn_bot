@@ -1,13 +1,17 @@
 import pytest
-from app.models import Peer, PeerStatus
+from app.models import Peer, PeerStatus, Role, User
 from app.crypto import encrypt_private_key
 from scripts.migrate_encrypt_keys import migrate
 
 
 @pytest.mark.asyncio
 async def test_migrate_encrypts_plaintext(session):
+    user = User(name="Migrate User", role=Role.user)
+    session.add(user)
+    await session.commit()
+    await session.refresh(user)
     peer = Peer(
-        user_id=1, iface="wg0", public_key="pk1",
+        user_id=user.id, iface="wg0", public_key="pk1",
         private_key_enc="plaintext_key_abc123",
         address="10.10.0.2/32", allowed_ips="10.10.0.2/32",
         status=PeerStatus.active,
@@ -24,9 +28,13 @@ async def test_migrate_encrypts_plaintext(session):
 
 @pytest.mark.asyncio
 async def test_migrate_skips_already_encrypted(session):
+    user = User(name="Migrate User", role=Role.user)
+    session.add(user)
+    await session.commit()
+    await session.refresh(user)
     encrypted = encrypt_private_key("my_secret_key")
     peer = Peer(
-        user_id=1, iface="wg0", public_key="pk2",
+        user_id=user.id, iface="wg0", public_key="pk2",
         private_key_enc=encrypted,
         address="10.10.0.3/32", allowed_ips="10.10.0.3/32",
         status=PeerStatus.active,

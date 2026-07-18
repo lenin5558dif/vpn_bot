@@ -4,8 +4,13 @@ from datetime import datetime
 from typing import Optional
 
 from pydantic import BaseModel, Field
+from pydantic import field_validator
+import ipaddress
 
+from app.config import get_settings
 from app.models import PeerStatus, RequestStatus, Role
+
+settings = get_settings()
 
 
 class TokenResponse(BaseModel):
@@ -60,8 +65,20 @@ class RequestUpdate(BaseModel):
 
 class PeerCreate(BaseModel):
     user_id: int
-    speed_limit_mbps: Optional[int] = None
-    allowed_ips: Optional[str] = Field(default=None, max_length=50)
+    speed_limit_mbps: Optional[int] = Field(default=None, ge=0, le=settings.max_speed_limit_mbit)
+    allowed_ips: Optional[str] = Field(default=None, max_length=200)
+
+    @field_validator("allowed_ips")
+    @classmethod
+    def validate_allowed_ips(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
+        networks = [part.strip() for part in value.split(",")]
+        if not all(networks):
+            raise ValueError("allowed_ips must contain comma-separated CIDR networks")
+        for network in networks:
+            ipaddress.ip_network(network, strict=False)
+        return ", ".join(networks)
 
 
 class PeerRead(BaseModel):
@@ -82,7 +99,7 @@ class PeerRead(BaseModel):
 
 class PeerStatusUpdate(BaseModel):
     status: PeerStatus
-    speed_limit_mbps: Optional[int] = None
+    speed_limit_mbps: Optional[int] = Field(default=None, ge=0, le=settings.max_speed_limit_mbit)
 
 
 class ConfigRead(BaseModel):

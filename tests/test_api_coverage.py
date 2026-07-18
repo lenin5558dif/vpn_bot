@@ -98,8 +98,13 @@ async def test_download_config_with_decrypt(client, admin_headers, bot_headers, 
 
 @pytest.mark.asyncio
 async def test_list_traffic_with_hours_filter(client, admin_headers, session):
+    from app.models import Role, User
+    user = User(name="Traffic User", role=Role.user)
+    session.add(user)
+    await session.commit()
+    await session.refresh(user)
     peer = Peer(
-        user_id=1, iface="wg0", public_key="pk", private_key_enc="enc",
+        user_id=user.id, iface="wg0", public_key="pk", private_key_enc="enc",
         address="10.10.0.2/32", allowed_ips="10.10.0.2/32", status=PeerStatus.active,
     )
     session.add(peer)

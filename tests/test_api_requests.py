@@ -41,6 +41,23 @@ async def test_list_requests_filter_status(client, admin_headers, bot_headers):
 
 
 @pytest.mark.asyncio
+async def test_list_requests_filter_user_id_with_bot_key(client, bot_headers):
+    user1 = await client.post("/users", json={"name": "U1"}, headers=bot_headers)
+    user2 = await client.post("/users", json={"name": "U2"}, headers=bot_headers)
+    uid1 = user1.json()["id"]
+    uid2 = user2.json()["id"]
+    await client.post("/requests", json={"user_id": uid1}, headers=bot_headers)
+    await client.post("/requests", json={"user_id": uid2}, headers=bot_headers)
+
+    resp = await client.get(f"/requests?user_id={uid2}", headers=bot_headers)
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert len(data) == 1
+    assert data[0]["user_id"] == uid2
+
+
+@pytest.mark.asyncio
 async def test_list_requests_pagination(client, admin_headers, bot_headers):
     user = await client.post("/users", json={"name": "U"}, headers=bot_headers)
     uid = user.json()["id"]

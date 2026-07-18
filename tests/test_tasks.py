@@ -3,8 +3,16 @@ from unittest.mock import AsyncMock, patch
 from datetime import datetime, timedelta
 
 from app.tasks import TrafficPoller
-from app.models import Peer, PeerStatus, TrafficStat
+from app.models import Peer, PeerStatus, Role, TrafficStat, User
 from app.database import SessionLocal
+
+
+async def _create_user(session, name: str = "Task User") -> User:
+    user = User(name=name, role=Role.user)
+    session.add(user)
+    await session.commit()
+    await session.refresh(user)
+    return user
 
 
 @pytest.mark.asyncio
@@ -32,8 +40,9 @@ async def test_collect_no_wg(session):
 @pytest.mark.asyncio
 async def test_collect_with_mock_wg_output(session):
     """Mock wg show transfer output and verify stats are recorded."""
+    user = await _create_user(session)
     peer = Peer(
-        user_id=1, iface="wg0", public_key="testpubkey123",
+        user_id=user.id, iface="wg0", public_key="testpubkey123",
         private_key_enc="enc", address="10.10.0.2/32",
         allowed_ips="10.10.0.2/32", status=PeerStatus.active,
     )
@@ -62,8 +71,9 @@ async def test_collect_with_mock_wg_output(session):
 @pytest.mark.asyncio
 async def test_cleanup(session):
     """cleanup should delete old records."""
+    user = await _create_user(session)
     peer = Peer(
-        user_id=1, iface="wg0", public_key="pk",
+        user_id=user.id, iface="wg0", public_key="pk",
         private_key_enc="enc", address="10.10.0.2/32",
         allowed_ips="10.10.0.2/32", status=PeerStatus.active,
     )

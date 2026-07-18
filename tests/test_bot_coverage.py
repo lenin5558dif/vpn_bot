@@ -69,6 +69,7 @@ async def test_admin_actions_users():
 
     with patch("bot.main.backend") as mock_be:
         mock_be.list_users = AsyncMock(return_value=[{"id": 1, "name": "U", "contact": "c"}])
+        mock_be.list_peers = AsyncMock(return_value=[])
         await admin_actions(callback)
 
     callback.message.answer.assert_called()
@@ -151,6 +152,7 @@ async def test_approve_fetch_user_error():
 
     with patch("bot.main.backend") as mock_be:
         mock_be.update_request = AsyncMock()
+        mock_be.list_peers = AsyncMock(return_value=[])
         mock_be.create_peer = AsyncMock(return_value={"id": 10})
         mock_be.get_config = AsyncMock(return_value="[Interface]\nPrivateKey=x")
         mock_be.get_user = AsyncMock(side_effect=Exception("network error"))

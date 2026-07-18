@@ -4,7 +4,7 @@ from fastapi import APIRouter, Query
 from sqlalchemy import func
 from sqlmodel import select
 
-from app.api.deps import AdminDep, DBSession
+from app.api.deps import AdminDep, AdminOrBotDep, DBSession
 from app.models import Peer, TrafficStat, User
 from app.schemas import TrafficRead
 
@@ -32,7 +32,7 @@ async def list_traffic(
 @router.get("/summary")
 async def traffic_summary(
     session: DBSession,
-    admin: AdminDep,
+    admin: AdminOrBotDep,
     hours: int = Query(24, ge=1, le=720),
 ) -> list[dict]:
     _ = admin

@@ -4,7 +4,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Optional
 
-from sqlalchemy import Index
+from sqlalchemy import Index, UniqueConstraint
 from sqlmodel import Column, DateTime, Enum as PgEnum, Field, JSON, SQLModel
 
 
@@ -47,6 +47,11 @@ class Request(SQLModel, table=True):
 
 
 class Peer(SQLModel, table=True):
+    __table_args__ = (
+        UniqueConstraint("address", name="uq_peer_address"),
+        UniqueConstraint("public_key", name="uq_peer_public_key"),
+    )
+
     id: Optional[int] = Field(default=None, primary_key=True)
     user_id: int = Field(foreign_key="user.id", index=True)
     iface: str = Field(default="wg0")

@@ -71,7 +71,8 @@ app/
 └── audit.py            record_audit helper
 
 bot/
-├── main.py             Хэндлеры, FSM, админ-меню
+├── main.py             Хэндлеры, FSM, пользовательские карточки админ-меню
+├── alerts.py           Дедуплицированные Telegram-алерты + persistent state
 └── backend.py          HTTP-клиент (shared httpx pool)
 
 frontend/index.html     Админ-панель (XSS-safe)
@@ -89,7 +90,6 @@ deploy.sh               Автоматический деплой на Ubuntu
 |---|---|---|
 | `BOT_TOKEN` | Telegram Bot Token | @BotFather |
 | `ADMIN_IDS` | Telegram ID админов (через запятую) | @userinfobot |
-| `ADMIN_PASSWORD` | Пароль админа (для бота) | Придумать |
 | `ADMIN_PASSWORD_HASH` | Bcrypt-хэш пароля | `python3 -c "from passlib.context import CryptContext; print(CryptContext(schemes=['bcrypt']).hash('пароль'))"` |
 | `ENCRYPTION_KEY` | Fernet-ключ | `python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"` |
 | `BOT_API_KEY` | Shared secret бот↔backend | `python3 -c "import secrets; print(secrets.token_urlsafe(32))"` |
@@ -105,14 +105,24 @@ deploy.sh               Автоматический деплой на Ubuntu
 | `WG_NETWORK` | `10.10.0.0/24` | Подсеть VPN (макс 253 пира) |
 | `CORS_ORIGINS` | `http://localhost:3000` | Разрешённые CORS origins |
 | `LOG_LEVEL` | `INFO` | Уровень логирования |
+| `ALERTS_ENABLED` | `true` | Включить автоматические алерты |
+| `ALERTS_TRAFFIC_24H_THRESHOLD_GB` | `50` | Порог трафика пользователя за 24 часа |
+| `ALERTS_DISK_WARN_PCT` | `80` | Порог заполнения диска |
+| `ALERTS_DISK_RECOVERY_PCT` | `75` | Recovery-порог диска (гистерезис) |
+| `ALERTS_FAILURE_THRESHOLD` | `3` | Число последовательных health-сбоев до алерта |
+| `ALERTS_REPEAT_HOURS` | `6` | Интервал повторного активного алерта |
+| `ALERTS_STATE_FILE` | `/var/lib/vpn-tg-app/bot-alerts-state.json` | Состояние дедупликации (chmod 600) |
 
 ### Startup-валидация
 Приложение **не запустится** без: `ENCRYPTION_KEY`, `SERVER_PUBLIC_KEY`, `ADMIN_PASSWORD_HASH`, `BOT_API_KEY`. Ошибка будет понятной.
+
+`ADMIN_PASSWORD` не хранится в `.env`. Бот использует `BOT_API_KEY` для внутренних админских операций; пароль администратора нужен только для web-login и генерации bcrypt-хэша. Повторный запуск `deploy.sh` сохраняет существующие JWT/Fernet/Bot API Key и делает backup `.env`, SQLite-БД и WireGuard-конфига.
 
 ## Безопасность
 - **WG ключи** зашифрованы Fernet (AES-128-CBC) в SQLite
 - **JWT** через PyJWT с обязательными claims: exp, sub, iss, aud
 - **Пароль** — только bcrypt-хэш, plaintext fallback удалён
+- **WireGuard lifecycle** — обязательные `awg`/`tc` операции fail-closed: API возвращает ошибку и не фиксирует ложный успех в БД
 - **Bot API Key** — hmac.compare_digest (timing-safe)
 - **Rate limiting** — 5/мин на /auth/login
 - **XSS** — все данные экранированы через `esc()` в frontend
@@ -129,12 +139,16 @@ deploy.sh               Автоматический деплой на Ubuntu
 | POST | `/users` | Bot API Key | Создание/upsert пользователя |
 | GET | `/users` | JWT | Список пользователей |
 | GET | `/users/{id}` | JWT | Детали пользователя |
+| GET | `/users/admin/list` | JWT / Bot API Key | Поиск и агрегированный список |
+| GET | `/users/{id}/admin-card` | JWT / Bot API Key | Пользователь, peer, traffic и handshake |
 | POST | `/requests` | Bot API Key | Создание заявки |
 | GET | `/requests?status=new` | JWT | Список заявок |
 | PATCH | `/requests/{id}` | JWT | Одобрить/отклонить |
 | POST | `/peers` | JWT | Создание пира |
 | GET | `/peers` | JWT | Список пиров |
 | PATCH | `/peers/{id}` | JWT | Статус/скорость пира |
+| PATCH | `/peers/user/{id}/status` | JWT / Bot API Key | Массовое включение/отключение |
+| GET | `/peers/reconcile` | JWT / Bot API Key | Read-only сверка БД ↔ WireGuard |
 | GET | `/peers/{id}/config/file` | JWT | Скачать .conf |
 | GET | `/traffic?hours=24` | JWT | Статистика трафика |
 | GET | `/traffic/summary?hours=24` | JWT | Агрегат по пирам |
@@ -147,6 +161,16 @@ deploy.sh               Автоматический деплой на Ubuntu
 3. Админ получает уведомление → «Одобрить» / «Отказать»
 4. При одобрении: генерация ключей → IP → `wg set` → `.conf` файл в чат
 5. При отказе: уведомление пользователю
+
+## Админский бот и алерты
+
+- `/admin` открывает единый экран со страницами и поиском по имени, контакту, user ID и Telegram ID.
+- Карточка пользователя показывает заявку, устройства, скорость, handshake и трафик за 24 часа.
+- Из карточки можно создать устройство, включить/отключить peer, изменить скорость и повторно отправить конфиг.
+- Диагностика выявляет неизвестные WG peer, отсутствующие runtime peer и allowed-ips mismatch.
+- Алерты имеют cooldown, recovery и persistent JSON-состояние; успешная доставка учитывается отдельно для каждого администратора.
+- Неизвестные peer только обнаруживаются: монитор не выполняет автоматическое удаление.
+- Если недоступен сам VPS или остановлен bot service, внутренний Telegram-монитор уведомить не сможет; для этого нужен внешний uptime monitor.
 
 ## Управление (на сервере)
 ```bash

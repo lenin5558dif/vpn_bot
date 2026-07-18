@@ -14,6 +14,7 @@ filterwarnings = [
 
 [tool.coverage.run]
 source = ["app", "bot", "scripts"]
+concurrency = ["greenlet", "thread"]
 omit = ["tests/*"]
 
 [tool.coverage.report]

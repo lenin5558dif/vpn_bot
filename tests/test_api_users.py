@@ -43,6 +43,19 @@ async def test_list_users_pagination(client, admin_headers, bot_headers):
 
 
 @pytest.mark.asyncio
+async def test_list_users_filter_tg_id_with_bot_key(client, bot_headers):
+    await client.post("/users", json={"name": "User1", "tg_id": 101}, headers=bot_headers)
+    await client.post("/users", json={"name": "User2", "tg_id": 102}, headers=bot_headers)
+
+    resp = await client.get("/users?tg_id=102", headers=bot_headers)
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert len(data) == 1
+    assert data[0]["tg_id"] == 102
+
+
+@pytest.mark.asyncio
 async def test_list_users_no_auth(client):
     resp = await client.get("/users")
     assert resp.status_code == 401

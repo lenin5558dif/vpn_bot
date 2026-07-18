@@ -4,7 +4,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from bot.main import (
     translit_slug,
     _format_requests,
-    _format_peers,
     _format_users,
     _ensure_admin,
     ADMIN_IDS,
@@ -53,17 +52,6 @@ def test_format_requests_max_15():
     result = _format_requests(reqs)
     lines = result.strip().split("\n")
     assert len(lines) == 15
-
-
-def test_format_peers_empty():
-    assert _format_peers([]) == "Пусто"
-
-
-def test_format_peers_with_data():
-    peers = [{"id": 1, "user_id": 2, "address": "10.0.0.2", "status": "active", "speed_limit_mbps": 20}]
-    result = _format_peers(peers)
-    assert "#1" in result
-    assert "20mbit" in result
 
 
 def test_format_users_empty():
@@ -215,6 +203,7 @@ async def test_approve_request():
 
     with patch("bot.main.backend") as mock_be:
         mock_be.update_request = AsyncMock()
+        mock_be.list_peers = AsyncMock(return_value=[])
         mock_be.create_peer = AsyncMock(return_value={"id": 10})
         mock_be.get_config = AsyncMock(return_value="[Interface]\nPrivateKey=x")
         mock_be.get_user = AsyncMock(return_value={"name": "Тест"})
@@ -226,6 +215,105 @@ async def test_approve_request():
     mock_be.update_request.assert_called_once()
     mock_be.create_peer.assert_called_once()
     callback.answer.assert_called_with("Одобрено")
+
+
+@pytest.mark.asyncio
+async def test_approve_request_reuses_existing_peer_before_marking_approved():
+    from bot.main import approve_request
+    callback = AsyncMock()
+    callback.from_user = MagicMock()
+    callback.from_user.id = 123456789
+    callback.data = "approve:1:2:333"
+    callback.answer = AsyncMock()
+
+    with patch("bot.main.backend") as mock_be:
+        mock_be.update_request = AsyncMock()
+        mock_be.list_peers = AsyncMock(return_value=[{"id": 10, "status": "active"}])
+        mock_be.create_peer = AsyncMock()
+        mock_be.get_config = AsyncMock(return_value="[Interface]\nPrivateKey=x")
+        mock_be.get_user = AsyncMock(return_value={"name": "Тест"})
+        with patch("bot.main.bot") as mock_bot:
+            mock_bot.send_message = AsyncMock()
+            mock_bot.send_document = AsyncMock()
+            await approve_request(callback)
+
+    mock_be.create_peer.assert_not_called()
+    mock_be.update_request.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_approve_request_reactivates_disabled_peer_before_sending_config():
+    from bot.main import approve_request
+
+    callback = AsyncMock()
+    callback.from_user = MagicMock()
+    callback.from_user.id = 123456789
+    callback.data = "approve:1:2:333"
+    callback.answer = AsyncMock()
+
+    with patch("bot.main.backend") as mock_be:
+        mock_be.update_request = AsyncMock()
+        mock_be.list_peers = AsyncMock(return_value=[{"id": 10, "status": "disabled"}])
+        mock_be.update_peer_status = AsyncMock(
+            return_value={"id": 10, "user_id": 2, "status": "active"}
+        )
+        mock_be.create_peer = AsyncMock()
+        mock_be.get_config = AsyncMock(return_value="[Interface]\nPrivateKey=x")
+        mock_be.get_user = AsyncMock(return_value={"name": "Тест"})
+        with patch("bot.main.bot") as mock_bot:
+            mock_bot.send_message = AsyncMock()
+            mock_bot.send_document = AsyncMock()
+            await approve_request(callback)
+
+    mock_be.update_peer_status.assert_awaited_once_with(10, "active")
+    mock_be.get_config.assert_awaited_once_with(10)
+    mock_be.create_peer.assert_not_called()
+    mock_be.update_request.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_approve_request_provision_failure_does_not_mark_approved():
+    from bot.main import approve_request
+    callback = AsyncMock()
+    callback.from_user = MagicMock()
+    callback.from_user.id = 123456789
+    callback.data = "approve:1:2:333"
+    callback.answer = AsyncMock()
+    callback.message = AsyncMock()
+
+    with patch("bot.main.backend") as mock_be:
+        mock_be.update_request = AsyncMock()
+        mock_be.list_peers = AsyncMock(return_value=[])
+        mock_be.create_peer = AsyncMock(side_effect=Exception("wg failed"))
+        await approve_request(callback)
+
+    mock_be.update_request.assert_not_called()
+    callback.answer.assert_called_with("Ошибка выдачи", show_alert=True)
+
+
+@pytest.mark.asyncio
+async def test_approve_request_send_document_failure_does_not_mark_approved():
+    from bot.main import approve_request
+    callback = AsyncMock()
+    callback.from_user = MagicMock()
+    callback.from_user.id = 123456789
+    callback.data = "approve:1:2:333"
+    callback.answer = AsyncMock()
+    callback.message = AsyncMock()
+
+    with patch("bot.main.backend") as mock_be:
+        mock_be.update_request = AsyncMock()
+        mock_be.list_peers = AsyncMock(return_value=[])
+        mock_be.create_peer = AsyncMock(return_value={"id": 10})
+        mock_be.get_config = AsyncMock(return_value="[Interface]\nPrivateKey=x")
+        mock_be.get_user = AsyncMock(return_value={"name": "Тест"})
+        with patch("bot.main.bot") as mock_bot:
+            mock_bot.send_message = AsyncMock()
+            mock_bot.send_document = AsyncMock(side_effect=Exception("telegram failed"))
+            await approve_request(callback)
+
+    mock_be.update_request.assert_not_called()
+    callback.answer.assert_called_with("Ошибка отправки", show_alert=True)
 
 
 @pytest.mark.asyncio

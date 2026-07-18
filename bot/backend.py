@@ -67,6 +67,9 @@ class BackendClient:
             return self.token
 
     async def _headers(self) -> dict[str, str]:
+        bot_headers = self._bot_key_headers()
+        if bot_headers:
+            return bot_headers
         token = await self._get_token()
         return {"Authorization": f"Bearer {token}"}
 
@@ -98,8 +101,11 @@ class BackendClient:
         )
         return resp.json()
 
-    async def create_peer(self, user_id: int) -> dict[str, Any]:
-        resp = await self._request_with_auth("POST", "/peers", json={"user_id": user_id})
+    async def create_peer(self, user_id: int, speed_limit_mbps: int | None = None) -> dict[str, Any]:
+        payload: dict[str, Any] = {"user_id": user_id}
+        if speed_limit_mbps is not None:
+            payload["speed_limit_mbps"] = speed_limit_mbps
+        resp = await self._request_with_auth("POST", "/peers", json=payload)
         return resp.json()
 
     async def get_user(self, user_id: int) -> dict[str, Any]:
@@ -111,22 +117,63 @@ class BackendClient:
         return resp.text
 
     async def list_users(self) -> list[dict[str, Any]]:
-        resp = await self._request_with_auth("GET", "/users")
+        return await self._paginated_get("/users")
+
+    async def admin_user_list(
+        self,
+        query: str | None = None,
+        *,
+        limit: int = 8,
+        offset: int = 0,
+    ) -> dict[str, Any]:
+        params: dict[str, Any] = {"limit": limit, "offset": offset}
+        if query:
+            params["query"] = query
+        resp = await self._request_with_auth("GET", "/users/admin/list", params=params)
+        return resp.json()
+
+    async def admin_user_card(self, user_id: int) -> dict[str, Any]:
+        resp = await self._request_with_auth("GET", f"/users/{user_id}/admin-card")
         return resp.json()
 
     async def list_requests(self, status: str | None = None) -> list[dict[str, Any]]:
-        params = {}
+        params: dict[str, Any] = {}
         if status:
             params["status"] = status
-        resp = await self._request_with_auth("GET", "/requests", params=params)
+        return await self._paginated_get("/requests", params=params)
+
+    async def list_peers(self, user_id: int | None = None) -> list[dict[str, Any]]:
+        params: dict[str, Any] = {}
+        if user_id is not None:
+            params["user_id"] = user_id
+        return await self._paginated_get("/peers", params=params)
+
+    async def update_peer_status(
+        self,
+        peer_id: int,
+        status: str,
+        speed_limit_mbps: int | None = None,
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {"status": status}
+        if speed_limit_mbps is not None:
+            payload["speed_limit_mbps"] = speed_limit_mbps
+        resp = await self._request_with_auth("PATCH", f"/peers/{peer_id}", json=payload)
         return resp.json()
 
-    async def list_peers(self) -> list[dict[str, Any]]:
-        resp = await self._request_with_auth("GET", "/peers")
+    async def bulk_update_user_peers(
+        self,
+        user_id: int,
+        status: str,
+        speed_limit_mbps: int | None = None,
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {"status": status}
+        if speed_limit_mbps is not None:
+            payload["speed_limit_mbps"] = speed_limit_mbps
+        resp = await self._request_with_auth("PATCH", f"/peers/user/{user_id}/status", json=payload)
         return resp.json()
 
-    async def update_peer_status(self, peer_id: int, status: str) -> dict[str, Any]:
-        resp = await self._request_with_auth("PATCH", f"/peers/{peer_id}", json={"status": status})
+    async def reconcile_peers(self) -> dict[str, Any]:
+        resp = await self._request_with_auth("GET", "/peers/reconcile")
         return resp.json()
 
     async def health(self) -> dict[str, Any]:
@@ -149,12 +196,31 @@ class BackendClient:
         return resp.json()
 
     async def get_user_by_tg_id(self, tg_id: int) -> dict[str, Any] | None:
-        users = await self.list_users()
-        for u in users:
-            if u.get("tg_id") == tg_id:
-                return u
-        return None
+        resp = await self._request_with_auth("GET", "/users", params={"tg_id": tg_id, "limit": 1})
+        users = resp.json()
+        return users[0] if users else None
 
     async def get_requests_by_user_id(self, user_id: int) -> list[dict[str, Any]]:
-        reqs = await self.list_requests()
-        return [r for r in reqs if r.get("user_id") == user_id]
+        return await self._paginated_get("/requests", params={"user_id": user_id})
+
+    async def _paginated_get(
+        self,
+        path: str,
+        params: dict[str, Any] | None = None,
+        *,
+        page_size: int = 500,
+    ) -> list[dict[str, Any]]:
+        merged = dict(params or {})
+        offset = 0
+        items: list[dict[str, Any]] = []
+        while True:
+            resp = await self._request_with_auth(
+                "GET",
+                path,
+                params={**merged, "limit": page_size, "offset": offset},
+            )
+            page = resp.json()
+            items.extend(page)
+            if len(page) < page_size:
+                return items
+            offset += page_size

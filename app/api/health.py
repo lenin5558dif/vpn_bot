@@ -1,11 +1,12 @@
 import asyncio
+import contextlib
 import logging
 
 from fastapi import APIRouter
 from sqlalchemy import text
 
 from app.config import get_settings
-from app.api.deps import AdminDep
+from app.api.deps import AdminOrBotDep
 from app.database import engine
 
 logger = logging.getLogger(__name__)
@@ -31,8 +32,19 @@ async def health() -> dict:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
-        await proc.communicate()
-        checks["wireguard"] = "ok" if proc.returncode == 0 else "error"
+        try:
+            await asyncio.wait_for(
+                proc.communicate(),
+                timeout=settings.subprocess_timeout_sec,
+            )
+        except TimeoutError:
+            with contextlib.suppress(ProcessLookupError):
+                proc.kill()
+            with contextlib.suppress(ProcessLookupError):
+                await proc.wait()
+            checks["wireguard"] = "timeout"
+        else:
+            checks["wireguard"] = "ok" if proc.returncode == 0 else "error"
     except Exception:
         checks["wireguard"] = "unavailable"
 
@@ -41,7 +53,7 @@ async def health() -> dict:
 
 
 @router.get("/stats/server")
-async def server_stats(admin: AdminDep) -> dict:
+async def server_stats(admin: AdminOrBotDep) -> dict:
     """Return server system stats."""
     import os
     import time
@@ -68,11 +80,14 @@ async def server_stats(admin: AdminDep) -> dict:
     # Disk
     try:
         st = os.statvfs("/")
-        disk_total = st.f_blocks * st.f_frsize // (1024 ** 3)
-        disk_free = st.f_bavail * st.f_frsize // (1024 ** 3)
-        disk_used = disk_total - disk_free
+        disk_total_bytes = st.f_blocks * st.f_frsize
+        disk_free_bytes = st.f_bavail * st.f_frsize
+        disk_used_bytes = disk_total_bytes - disk_free_bytes
+        disk_total = disk_total_bytes // (1024 ** 3)
+        disk_used = disk_used_bytes // (1024 ** 3)
+        disk_used_pct = round((disk_used_bytes / disk_total_bytes * 100), 1) if disk_total_bytes else 0.0
     except Exception:
-        disk_total, disk_used = 0, 0
+        disk_total, disk_used, disk_used_pct = 0, 0, 0.0
 
     # Uptime
     try:
@@ -100,6 +115,7 @@ async def server_stats(admin: AdminDep) -> dict:
         "ram_total_mb": mem_total,
         "disk_used_gb": disk_used,
         "disk_total_gb": disk_total,
+        "disk_used_pct": disk_used_pct,
         "uptime": uptime_str,
         "peers_total": peers,
         "trafficstat_rows": traffic,

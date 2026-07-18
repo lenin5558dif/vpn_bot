@@ -22,6 +22,13 @@ info()  { echo -e "${GREEN}[+]${NC} $1"; }
 warn()  { echo -e "${YELLOW}[!]${NC} $1"; }
 error() { echo -e "${RED}[✗]${NC} $1"; exit 1; }
 
+env_value() {
+    local file="$1"
+    local key="$2"
+    [[ -f "$file" ]] || return 0
+    awk -F= -v k="$key" '$1 == k {sub(/^[^=]*=/, ""); print; exit}' "$file"
+}
+
 # -----------------------------------------------------------
 # 1. Проверки
 # -----------------------------------------------------------
@@ -40,18 +47,26 @@ echo ""
 warn "Нужны 3 вещи, которые нельзя сгенерировать автоматически:"
 echo ""
 
-read -rp "$(echo -e ${YELLOW})BOT_TOKEN (от @BotFather): $(echo -e ${NC})" BOT_TOKEN
+EXISTING_ENV="$APP_DIR/.env"
+OLD_BOT_TOKEN="$(env_value "$EXISTING_ENV" BOT_TOKEN)"
+OLD_ADMIN_IDS="$(env_value "$EXISTING_ENV" ADMIN_IDS)"
+OLD_ADMIN_USERNAME="$(env_value "$EXISTING_ENV" ADMIN_USERNAME)"
+OLD_ADMIN_PASSWORD_HASH="$(env_value "$EXISTING_ENV" ADMIN_PASSWORD_HASH)"
+
+read -rp "$(echo -e ${YELLOW})BOT_TOKEN (от @BotFather)${OLD_BOT_TOKEN:+ [оставить текущий]}: $(echo -e ${NC})" BOT_TOKEN
+BOT_TOKEN="${BOT_TOKEN:-$OLD_BOT_TOKEN}"
 [[ -z "$BOT_TOKEN" ]] && error "BOT_TOKEN обязателен"
 
-read -rp "$(echo -e ${YELLOW})ADMIN_IDS (Telegram ID админа, через запятую): $(echo -e ${NC})" ADMIN_IDS
+read -rp "$(echo -e ${YELLOW})ADMIN_IDS (Telegram ID админа, через запятую)${OLD_ADMIN_IDS:+ [${OLD_ADMIN_IDS}]}: $(echo -e ${NC})" ADMIN_IDS
+ADMIN_IDS="${ADMIN_IDS:-$OLD_ADMIN_IDS}"
 [[ -z "$ADMIN_IDS" ]] && error "ADMIN_IDS обязателен"
 
-read -rsp "$(echo -e ${YELLOW})Пароль админа для веб-панели: $(echo -e ${NC})" ADMIN_PASSWORD
+read -rsp "$(echo -e ${YELLOW})Пароль админа для веб-панели${OLD_ADMIN_PASSWORD_HASH:+ [Enter — оставить текущий]}: $(echo -e ${NC})" ADMIN_PASSWORD
 echo ""
-[[ -z "$ADMIN_PASSWORD" ]] && error "Пароль обязателен"
+[[ -z "$ADMIN_PASSWORD" && -z "$OLD_ADMIN_PASSWORD_HASH" ]] && error "Пароль обязателен"
 
-read -rp "$(echo -e ${YELLOW})Имя пользователя админа [admin]: $(echo -e ${NC})" ADMIN_USERNAME
-ADMIN_USERNAME="${ADMIN_USERNAME:-admin}"
+read -rp "$(echo -e ${YELLOW})Имя пользователя админа [${OLD_ADMIN_USERNAME:-admin}]: $(echo -e ${NC})" ADMIN_USERNAME
+ADMIN_USERNAME="${ADMIN_USERNAME:-${OLD_ADMIN_USERNAME:-admin}}"
 
 # -----------------------------------------------------------
 # 3. Установка системных зависимостей
@@ -128,8 +143,14 @@ info "Внешний IP: ${SERVER_IP}"
 if [[ -d "$APP_DIR/.git" ]]; then
     info "Обновляю код..."
     cd "$APP_DIR"
-    # Бэкап
-    [[ -f vpnapp.sqlite ]] && cp vpnapp.sqlite "vpnapp.sqlite.bak.$(date +%Y%m%d_%H%M%S)"
+    BACKUP_DIR="$APP_DIR/backups/$(date +%Y%m%d_%H%M%S)"
+    mkdir -p "$BACKUP_DIR"
+    chmod 700 "$BACKUP_DIR"
+    [[ -f .env ]] && cp .env "$BACKUP_DIR/.env"
+    [[ -f vpnapp.sqlite ]] && cp vpnapp.sqlite "$BACKUP_DIR/vpnapp.sqlite"
+    [[ -f "/etc/wireguard/${WG_IFACE}.conf" ]] && cp "/etc/wireguard/${WG_IFACE}.conf" "$BACKUP_DIR/${WG_IFACE}.conf"
+    chmod 600 "$BACKUP_DIR"/* "$BACKUP_DIR"/.env 2>/dev/null || true
+    info "Backup сохранён: $BACKUP_DIR"
 else
     info "Копирую код приложения..."
     mkdir -p "$APP_DIR"
@@ -156,10 +177,25 @@ pip install -q -r requirements.txt
 # -----------------------------------------------------------
 info "Генерирую секреты..."
 
-JWT_SECRET=$(python3 -c "import secrets; print(secrets.token_urlsafe(32))")
-ENCRYPTION_KEY=$(python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())")
-BOT_API_KEY=$(python3 -c "import secrets; print(secrets.token_urlsafe(32))")
-ADMIN_PASSWORD_HASH=$(python3 -c "from passlib.context import CryptContext; print(CryptContext(schemes=['bcrypt']).hash('${ADMIN_PASSWORD}'))")
+OLD_JWT_SECRET="$(env_value "$APP_DIR/.env" JWT_SECRET)"
+OLD_ENCRYPTION_KEY="$(env_value "$APP_DIR/.env" ENCRYPTION_KEY)"
+OLD_BOT_API_KEY="$(env_value "$APP_DIR/.env" BOT_API_KEY)"
+OLD_ADMIN_PASSWORD_HASH="$(env_value "$APP_DIR/.env" ADMIN_PASSWORD_HASH)"
+
+JWT_SECRET="${OLD_JWT_SECRET:-$(python3 -c "import secrets; print(secrets.token_urlsafe(32))")}"
+ENCRYPTION_KEY="${OLD_ENCRYPTION_KEY:-$(python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())")}"
+BOT_API_KEY="${OLD_BOT_API_KEY:-$(python3 -c "import secrets; print(secrets.token_urlsafe(32))")}"
+if [[ -n "$ADMIN_PASSWORD" ]]; then
+    ADMIN_PASSWORD_HASH=$(ADMIN_PASSWORD_PLAIN="$ADMIN_PASSWORD" python3 - <<'PY'
+import os
+from passlib.context import CryptContext
+
+print(CryptContext(schemes=["bcrypt"]).hash(os.environ["ADMIN_PASSWORD_PLAIN"]))
+PY
+)
+else
+    ADMIN_PASSWORD_HASH="$OLD_ADMIN_PASSWORD_HASH"
+fi
 
 cat > "$APP_DIR/.env" << ENVEOF
 # Database
@@ -172,7 +208,6 @@ BACKEND_URL=http://localhost:8000
 JWT_SECRET=${JWT_SECRET}
 JWT_ALG=HS256
 ADMIN_USERNAME=${ADMIN_USERNAME}
-ADMIN_PASSWORD=${ADMIN_PASSWORD}
 ADMIN_PASSWORD_HASH=${ADMIN_PASSWORD_HASH}
 
 # Encryption
@@ -194,12 +229,28 @@ WG_KEEPALIVE=25
 DEFAULT_SPEED_LIMIT_MBIT=20
 SERVER_PUBLIC_KEY=${SERVER_PUBLIC_KEY}
 
+# Bot alerts
+ALERTS_ENABLED=true
+ALERTS_HEALTH_INTERVAL_SEC=60
+ALERTS_DIAGNOSTIC_INTERVAL_SEC=300
+ALERTS_FAILURE_THRESHOLD=3
+ALERTS_TRAFFIC_24H_THRESHOLD_GB=50
+ALERTS_DISK_WARN_PCT=80
+ALERTS_DISK_RECOVERY_PCT=75
+ALERTS_REPEAT_HOURS=6
+ALERTS_STATE_FILE=/var/lib/vpn-tg-app/bot-alerts-state.json
+
 # CORS
 CORS_ORIGINS=http://localhost:3000
 ENVEOF
 
 chmod 600 "$APP_DIR/.env"
 info ".env создан (chmod 600)"
+
+mkdir -p /var/lib/vpn-tg-app
+chmod 700 /var/lib/vpn-tg-app
+[[ -s /var/lib/vpn-tg-app/bot-alerts-state.json ]] || printf '{}\n' > /var/lib/vpn-tg-app/bot-alerts-state.json
+chmod 600 /var/lib/vpn-tg-app/bot-alerts-state.json
 
 # -----------------------------------------------------------
 # 8. Миграция ключей (если есть старая БД)

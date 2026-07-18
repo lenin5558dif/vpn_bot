@@ -1,7 +1,15 @@
 import pytest
 from datetime import datetime
 
-from app.models import Peer, PeerStatus, TrafficStat
+from app.models import Peer, PeerStatus, Role, TrafficStat, User
+
+
+async def _create_user(session, name: str = "Traffic User") -> User:
+    user = User(name=name, role=Role.user)
+    session.add(user)
+    await session.commit()
+    await session.refresh(user)
+    return user
 
 
 @pytest.mark.asyncio
@@ -13,8 +21,9 @@ async def test_list_traffic_empty(client, admin_headers):
 
 @pytest.mark.asyncio
 async def test_list_traffic_with_data(client, admin_headers, session):
+    user = await _create_user(session)
     peer = Peer(
-        user_id=1, iface="wg0", public_key="pk", private_key_enc="enc",
+        user_id=user.id, iface="wg0", public_key="pk", private_key_enc="enc",
         address="10.10.0.2/32", allowed_ips="10.10.0.2/32", status=PeerStatus.active,
     )
     session.add(peer)
@@ -32,8 +41,9 @@ async def test_list_traffic_with_data(client, admin_headers, session):
 
 @pytest.mark.asyncio
 async def test_list_traffic_pagination(client, admin_headers, session):
+    user = await _create_user(session)
     peer = Peer(
-        user_id=1, iface="wg0", public_key="pk", private_key_enc="enc",
+        user_id=user.id, iface="wg0", public_key="pk", private_key_enc="enc",
         address="10.10.0.2/32", allowed_ips="10.10.0.2/32", status=PeerStatus.active,
     )
     session.add(peer)
@@ -48,7 +58,6 @@ async def test_list_traffic_pagination(client, admin_headers, session):
 
 @pytest.mark.asyncio
 async def test_traffic_summary(client, admin_headers, session):
-    from app.models import User, Role
     user = User(name="Test User", role=Role.user)
     session.add(user)
     await session.commit()
@@ -69,6 +78,13 @@ async def test_traffic_summary(client, admin_headers, session):
     assert len(data) == 1
     assert data[0]["rx"] == 50
     assert data[0]["name"] == "Test User"
+
+
+@pytest.mark.asyncio
+async def test_traffic_summary_accepts_bot_service_key(client, bot_headers):
+    resp = await client.get("/traffic/summary", headers=bot_headers)
+
+    assert resp.status_code == 200
 
 
 @pytest.mark.asyncio

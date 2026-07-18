@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import re
 from datetime import datetime, timedelta
@@ -9,9 +10,11 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import async_sessionmaker
 from sqlmodel import select
 
+from app.config import get_settings
 from app.models import Peer, TrafficStat
 
 logger = logging.getLogger(__name__)
+settings = get_settings()
 TRANSFER_RE = re.compile(r"transfer:\s+(\d+)\s+B received,\s+(\d+)\s+B sent")
 
 
@@ -56,7 +59,18 @@ class TrafficPoller:
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
-            stdout, _ = await proc.communicate()
+            try:
+                stdout, _ = await asyncio.wait_for(
+                    proc.communicate(),
+                    timeout=settings.subprocess_timeout_sec,
+                )
+            except TimeoutError:
+                with contextlib.suppress(ProcessLookupError):
+                    proc.kill()
+                with contextlib.suppress(ProcessLookupError):
+                    await proc.wait()
+                logger.warning("awg show transfer timed out")
+                return
             if proc.returncode != 0:
                 return
             output = stdout.decode()

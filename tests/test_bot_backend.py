@@ -10,6 +10,8 @@ from app.security import create_access_token
 @pytest.fixture
 def bc():
     client = BackendClient()
+    client.settings.bot_api_key = "test-bot-api-key"
+    client.settings.admin_password = "testpass"
     return client
 
 
@@ -90,8 +92,17 @@ async def test_headers(bc):
     mc = _mock_client()
     bc._client = mc
     headers = await bc._headers()
+    assert headers == {"X-Bot-Api-Key": "test-bot-api-key"}
+
+
+@pytest.mark.asyncio
+async def test_headers_fallback_to_admin_jwt_without_bot_key(bc):
+    bc.settings.bot_api_key = ""
+    bc.token = create_access_token({"sub": "admin"}, expires_delta=timedelta(hours=1))
+    mc = _mock_client()
+    bc._client = mc
+    headers = await bc._headers()
     assert "Authorization" in headers
-    assert headers["Authorization"].startswith("Bearer ")
 
 
 @pytest.mark.asyncio
@@ -258,6 +269,62 @@ async def test_list_peers(bc):
 
     result = await bc.list_peers()
     assert len(result) == 1
+
+
+@pytest.mark.asyncio
+async def test_list_peers_filters_user_id(bc):
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = [{"id": 1, "user_id": 7}]
+    mock_resp.raise_for_status = MagicMock()
+
+    mc = _mock_client()
+    mc.request = AsyncMock(return_value=mock_resp)
+    bc._client = mc
+
+    result = await bc.list_peers(user_id=7)
+
+    assert result[0]["user_id"] == 7
+    assert mc.request.call_args.kwargs["params"]["user_id"] == 7
+
+
+@pytest.mark.asyncio
+async def test_paginated_get_fetches_next_page_when_page_is_full(bc):
+    first_page = MagicMock()
+    first_page.status_code = 200
+    first_page.json.return_value = [{"id": i} for i in range(500)]
+    first_page.raise_for_status = MagicMock()
+    second_page = MagicMock()
+    second_page.status_code = 200
+    second_page.json.return_value = [{"id": 500}]
+    second_page.raise_for_status = MagicMock()
+
+    mc = _mock_client()
+    mc.request = AsyncMock(side_effect=[first_page, second_page])
+    bc._client = mc
+
+    result = await bc.list_users()
+
+    assert len(result) == 501
+    assert mc.request.call_args_list[0].kwargs["params"]["offset"] == 0
+    assert mc.request.call_args_list[1].kwargs["params"]["offset"] == 500
+
+
+@pytest.mark.asyncio
+async def test_get_user_by_tg_id_uses_backend_filter(bc):
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = [{"id": 42, "tg_id": 777}]
+    mock_resp.raise_for_status = MagicMock()
+
+    mc = _mock_client()
+    mc.request = AsyncMock(return_value=mock_resp)
+    bc._client = mc
+
+    result = await bc.get_user_by_tg_id(777)
+
+    assert result["id"] == 42
+    assert mc.request.call_args.kwargs["params"] == {"tg_id": 777, "limit": 1}
 
 
 @pytest.mark.asyncio
