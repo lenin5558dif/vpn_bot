@@ -33,7 +33,7 @@ class Settings(BaseSettings):
     wg_network: str = "10.10.0.0/24"
     wg_mtu: int = 1420
     wg_keepalive: int = 25
-    default_speed_limit_mbit: int = 20
+    default_speed_limit_mbit: int = 50
     max_speed_limit_mbit: int = 1000
     subprocess_timeout_sec: float = 10.0
     server_public_key: str = ""

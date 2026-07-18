@@ -36,7 +36,7 @@ async def test_create_peer(client, admin_headers, bot_headers, mock_wg):
     data = resp.json()
     assert data["status"] == "active"
     assert data["address"] == "10.10.0.2/32"
-    assert data["speed_limit_mbps"] == 20
+    assert data["speed_limit_mbps"] == 50
     mock_wg.apply_peer.assert_called_once()
 
 
@@ -265,7 +265,7 @@ async def test_ban_audit_failure_rolls_back_and_restores_wg_state(
             await client.patch(f"/peers/{pid}", json={"status": "banned"}, headers=admin_headers)
 
     mock_wg.apply_peer.assert_awaited_once_with("pubkey456", "10.10.0.2/32")
-    mock_wg.apply_speed_limit.assert_awaited_once_with("10.10.0.2", 20)
+    mock_wg.apply_speed_limit.assert_awaited_once_with("10.10.0.2", 50)
     peers = await client.get("/peers", headers=admin_headers)
     assert [item["id"] for item in peers.json()] == [pid]
 

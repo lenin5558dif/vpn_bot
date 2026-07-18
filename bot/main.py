@@ -524,7 +524,10 @@ async def _send_user_card(callback: CallbackQuery, user_id: int) -> None:
 def _peer_card_keyboard(peer: dict, user_id: int) -> InlineKeyboardMarkup:
     peer_id = peer.get("id")
     speed_buttons = [
-        InlineKeyboardButton(text=str(speed), callback_data=f"adm:ps:{peer_id}:{user_id}:{speed}")
+        InlineKeyboardButton(
+            text="Без лимита" if speed == 0 else f"{speed} Мбит",
+            callback_data=f"adm:ps:{peer_id}:{user_id}:{speed}",
+        )
         for speed in (5, 10, 20, 50, 100, 0)
     ]
     kb = InlineKeyboardMarkup(
@@ -533,6 +536,7 @@ def _peer_card_keyboard(peer: dict, user_id: int) -> InlineKeyboardMarkup:
                 InlineKeyboardButton(text="🔴 Отключить", callback_data=f"adm:pa:{peer_id}:disabled"),
                 InlineKeyboardButton(text="🟢 Включить", callback_data=f"adm:pa:{peer_id}:active"),
             ],
+            [InlineKeyboardButton(text="⚡ Ограничение скорости", callback_data="adm:noop")],
             speed_buttons[:3],
             speed_buttons[3:],
             [
@@ -682,7 +686,19 @@ async def admin_card_actions(callback: CallbackQuery, state: FSMContext) -> None
             peer_id = int(parts[2])
             user_id = int(parts[3])
             speed = int(parts[4])
-            await backend.update_peer_status(peer_id, "active", speed_limit_mbps=speed)
+            card = await backend.admin_user_card(user_id)
+            current_peer = next(
+                (peer for peer in card.get("peers", []) if int(peer.get("id")) == peer_id),
+                None,
+            )
+            if not current_peer or current_peer.get("status") not in {"active", "disabled"}:
+                await callback.answer("Peer недоступен для изменения скорости", show_alert=True)
+                return
+            await backend.update_peer_status(
+                peer_id,
+                current_peer["status"],
+                speed_limit_mbps=speed,
+            )
             await _send_peer_card(callback, peer_id, user_id)
         elif action == "ub":
             user_id = int(parts[2])

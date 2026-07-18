@@ -25,6 +25,7 @@ os.environ["WG_INTERFACE"] = "wg0"
 os.environ["WG_ENDPOINT"] = "test.example.com:51820"
 os.environ["WG_NETWORK"] = "10.10.0.0/24"
 os.environ["SERVER_PUBLIC_KEY"] = "dGVzdHB1YmxpY2tleWZvcnRlc3Rpbmc9"
+os.environ["DEFAULT_SPEED_LIMIT_MBIT"] = "50"
 
 # Generate a valid Fernet key for tests
 from cryptography.fernet import Fernet

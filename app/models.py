@@ -60,7 +60,7 @@ class Peer(SQLModel, table=True):
     address: str
     allowed_ips: str
     status: PeerStatus = Field(sa_column=Column(PgEnum(PeerStatus), nullable=False), default=PeerStatus.pending)
-    speed_limit_mbps: int = Field(default=20)
+    speed_limit_mbps: int = Field(default=50)
     created_at: datetime = Field(default_factory=datetime.utcnow, sa_column=Column(DateTime(timezone=False)))
     updated_at: datetime = Field(default_factory=datetime.utcnow, sa_column=Column(DateTime(timezone=False)))
     last_handshake_at: Optional[datetime] = Field(default=None, sa_column=Column(DateTime(timezone=False)))

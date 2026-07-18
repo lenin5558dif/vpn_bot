@@ -47,7 +47,7 @@ async def test_create_peer(session):
     await session.commit()
     await session.refresh(peer)
     assert peer.id is not None
-    assert peer.speed_limit_mbps == 20
+    assert peer.speed_limit_mbps == 50
 
 
 @pytest.mark.asyncio

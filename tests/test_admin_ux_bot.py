@@ -55,6 +55,20 @@ def test_user_card_keyboard_routes_peer_and_bulk_actions_to_user_context():
     assert "adm:ub:7:active" in callbacks
 
 
+def test_peer_card_keyboard_exposes_speed_presets_and_unlimited():
+    from bot.main import _peer_card_keyboard
+
+    keyboard = _peer_card_keyboard({"id": 10, "status": "active"}, user_id=7)
+    buttons = [button for row in keyboard.inline_keyboard for button in row]
+    labels = {button.text for button in buttons}
+    callbacks = {button.callback_data for button in buttons}
+
+    assert "50 Мбит" in labels
+    assert "Без лимита" in labels
+    assert "adm:ps:10:7:50" in callbacks
+    assert "adm:ps:10:7:0" in callbacks
+
+
 def test_format_user_list_shows_search_aggregates_and_empty_state():
     from bot.main import _format_user_list
 
@@ -124,6 +138,37 @@ async def test_admin_card_actions_updates_peer_and_refreshes_returned_user_card(
     backend.update_peer_status.assert_awaited_once_with(10, "disabled")
     backend.admin_user_card.assert_awaited_once_with(7)
     callback.message.edit_text.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_speed_change_preserves_disabled_peer_status():
+    from bot.main import admin_card_actions
+
+    callback = _callback("adm:ps:10:7:50")
+    state = AsyncMock()
+    card = {
+        "user": {"id": 7, "name": "Alice"},
+        "latest_request": {},
+        "wg": {"available": True},
+        "traffic_24h_bytes": 0,
+        "peers": [{
+            "id": 10,
+            "user_id": 7,
+            "address": "10.10.0.10/32",
+            "status": "disabled",
+            "speed_limit_mbps": 50,
+        }],
+    }
+    with patch("bot.main.backend") as backend:
+        backend.admin_user_card = AsyncMock(return_value=card)
+        backend.update_peer_status = AsyncMock(return_value=card["peers"][0])
+        await admin_card_actions(callback, state)
+
+    backend.update_peer_status.assert_awaited_once_with(
+        10,
+        "disabled",
+        speed_limit_mbps=50,
+    )
 
 
 @pytest.mark.asyncio

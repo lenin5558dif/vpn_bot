@@ -8,7 +8,7 @@ def test_settings_loaded():
     assert s.wg_interface == "wg0"
     assert s.wg_mtu == 1420
     assert s.wg_keepalive == 25
-    assert s.default_speed_limit_mbit == 20
+    assert s.default_speed_limit_mbit == 50
 
 
 def test_settings_fields():
